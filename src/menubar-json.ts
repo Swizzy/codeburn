@@ -221,10 +221,21 @@ export type CombinedUsage = {
   }
 }
 
+export type ClaudeConfigToday = {
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
 export type ClaudeConfigOption = {
   id: string
   label: string
   path: string
+  today?: ClaudeConfigToday
 }
 
 export type ClaudeConfigSelector = {

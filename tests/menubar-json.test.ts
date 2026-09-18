@@ -619,6 +619,16 @@ describe('buildMenubarPayload', () => {
         { id: 'claude-config:b', label: 'claude-personal', path: '/tmp/claude-personal' },
       ],
     })
+
+    const withToday = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, undefined, undefined, undefined, {
+      selectedId: null,
+      options: [
+        { id: 'claude-config:a', label: 'A', path: '/a', today: { cost: 1, calls: 2, sessions: 1, inputTokens: 3, outputTokens: 4, cacheReadTokens: 5, cacheWriteTokens: 6 } },
+        { id: 'claude-config:b', label: 'B', path: '/b' },
+      ],
+    })
+    expect(withToday.claudeConfigs?.options[0].today?.calls).toBe(2)
+    expect(withToday.claudeConfigs?.options[1]).not.toHaveProperty('today')
   })
 
   it('sets stale:true when the caller reports an incomplete hydration', () => {

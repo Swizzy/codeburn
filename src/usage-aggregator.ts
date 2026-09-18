@@ -342,6 +342,30 @@ async function claudeConfigSelector(projects: ProjectSummary[], selectedId?: str
   return buildSelector(byId, selectedId)
 }
 
+/// Today's totals per config directory, for the Capacity Dock's per-profile bubbles. Only
+/// the sessions filed under each option count, so the sum over options is today's Claude
+/// total and nothing is counted twice. Returns a new selector; the input is untouched.
+export function withClaudeConfigToday(selector: ClaudeConfigSelector, todayProjects: ProjectSummary[]): ClaudeConfigSelector {
+  return {
+    ...selector,
+    options: selector.options.map(option => {
+      const data = buildPeriodData(option.label, filterProjectsByClaudeConfigSource(todayProjects, option.id))
+      return {
+        ...option,
+        today: {
+          cost: data.cost,
+          calls: data.calls,
+          sessions: data.sessions,
+          inputTokens: data.inputTokens,
+          outputTokens: data.outputTokens,
+          cacheReadTokens: data.cacheReadTokens,
+          cacheWriteTokens: data.cacheWriteTokens,
+        },
+      }
+    }),
+  }
+}
+
 /// `d.models` keys by the raw provider id (day-aggregator), same as
 /// PeriodData.models — buildTopModels (menubar-json.ts) already merges those
 /// into display names for `current.topModels`. Merge here too, so
@@ -1658,6 +1682,13 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     durablePeriodTotals = durable.periodTotals
   }
   claudeConfigs = claudeConfigs ?? await claudeConfigSelector(scanProjects, null)
+
+  // The dock's per-profile bubbles read today's spend per config directory. Only the
+  // unscoped today request can say it: that is the one whose scan is exactly today's
+  // sessions, and `scanProjects` is already in hand, so this costs no parse.
+  if (claudeConfigs && !isClaudeConfigScoped && rangeStartStr === todayStr && rangeEndStr === todayStr) {
+    claudeConfigs = withClaudeConfigToday(claudeConfigs, scanProjects)
+  }
 
   // Codex credits for the period. Reuses the models aggregation (billable output
   // already includes reasoning for codex, keeps non-cached input + cached-read
