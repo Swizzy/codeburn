@@ -1118,8 +1118,9 @@ fn pointer_tick(app: &AppHandle, window: &tauri::WebviewWindow) -> u64 {
         if !primary_button_down() {
             let rail = frame.rail.offset(frame.window.x, frame.window.y);
             // The padding the frame was laid out with, so the resting length is the one this
-            // very rail collapses to rather than one for a docking it has not made yet.
-            let rest_len = rail_length(&state.metrics, 1, frame.along_pad, 0);
+            // very rail collapses to rather than one for a docking it has not made yet. The
+            // caption height comes from the same frame for the same reason.
+            let rest_len = rail_length(&state.metrics, 1, frame.along_pad, frame.row_extra);
             let placement =
                 placement_for_drop(&rail, rest_len, &screen, &state.placement.clone().unwrap_or_default());
             drop(state);
@@ -1624,6 +1625,42 @@ mod tests {
         let detail = framed.detail.unwrap();
         let row_mid = framed.rows_start - framed.window.y + (m.row_height + 14 + m.row_spacing) + (m.row_height + 14) / 2;
         assert_eq!(detail.y + detail.tail, row_mid);
+    }
+
+    /// `pointer_tick` reads `frame.row_extra` for the same reason it reads `frame.along_pad`:
+    /// the resting length it hands `placement_for_drop` has to match the one `layout` itself
+    /// will use to normalize the stored offset, or the rail settles short of where it was let
+    /// go by the caption height every time a row carries one.
+    #[test]
+    fn a_dropped_rail_with_a_caption_rests_at_the_length_it_was_laid_out_with() {
+        let m = small();
+        let here = screen(AREA, "one");
+        let floating =
+            Placement { docked: None, attachment: Edge::Right, x: Some(0.5), y: Some(0.2), monitor: None };
+        let mut showing = request(4, true, None);
+        showing.row_extra = 14;
+
+        // What the pointer is holding: four rows of rail, each a caption taller.
+        let held = layout(AREA, &floating, &showing, &m);
+        assert_eq!(held.row_extra, 14);
+        let rest_len = rail_length(&m, 1, held.along_pad, held.row_extra);
+        assert_eq!(rest_len, rail_length(&m, 1, held.along_pad, 0) + 14);
+
+        // Carried well clear of every edge and let go there: relaying the stored placement out
+        // lands the rail exactly where it was released, because rest_len matches what `layout`
+        // normalizes against internally.
+        let released = rail_on_screen(&held).offset(-260, 90);
+        let dropped = placement_for_drop(&released, rest_len, &here, &floating);
+        let landed = rail_on_screen(&layout(AREA, &dropped, &showing, &m));
+        assert_eq!(landed, released);
+
+        // Had the caption height been left out of rest_len (the bug this guards against), the
+        // offset would be normalized against a rail 14 pixels shorter than the one it actually
+        // collapses to, so relaying it out drifts off the drop point by that much.
+        let short_rest_len = rail_length(&m, 1, held.along_pad, 0);
+        let mis_dropped = placement_for_drop(&released, short_rest_len, &here, &floating);
+        let mis_landed = rail_on_screen(&layout(AREA, &mis_dropped, &showing, &m));
+        assert_ne!(mis_landed, released);
     }
 
     fn rail_on_screen(frame: &DockFrame) -> Rect {
