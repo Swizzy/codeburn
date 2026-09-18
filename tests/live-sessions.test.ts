@@ -18,6 +18,7 @@ function input(over: Partial<LiveSessionInput> = {}): LiveSessionInput {
     startedMs: NOW - 3_600_000,
     lastActivityMs: NOW - 10_000,
     subagentActivityMs: [],
+    claudeConfigSourceId: 'claude-config:a',
     ...over,
   }
 }
@@ -77,6 +78,17 @@ describe('buildLiveSessions', () => {
 
   it('treats a missing timestamp as not live rather than as the epoch', () => {
     expect(buildLiveSessions([input({ lastActivityMs: 0 })], NOW, LIVE_WINDOW_SECONDS).sessions).toEqual([])
+  })
+
+  it('carries the config source id through to the session', () => {
+    const block = buildLiveSessions([
+      input({ id: 'work', claudeConfigSourceId: 'claude-config:b' }),
+      input({ id: 'desktop', claudeConfigSourceId: null }),
+    ], NOW, LIVE_WINDOW_SECONDS)
+    expect(block.sessions.map(s => [s.id, s.claudeConfigSourceId])).toEqual([
+      ['work', 'claude-config:b'],
+      ['desktop', null],
+    ])
   })
 })
 

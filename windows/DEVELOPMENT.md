@@ -133,6 +133,22 @@ the user's login. Like `ClaudeCredentialStore.refreshAfter401` on macOS, we re-r
 own credential file for a token it has already rotated, and report a transient failure when
 there isn't one yet.
 
+### Claude profiles on the dock
+
+`codeburn quota --format json` adds a top-level `claudeProfiles` array when the CLI knows two
+or more Claude config directories (`claudeConfigDirs` in `~/.config/codeburn/config.json`, the
+Providers > Claude config directories list). `providers[]` is unchanged. `cli.rs` passes the
+array through in `DockQuota::Ready.claude_profiles`; `src/lib/dockRows.ts` turns the one
+`claude` row into a row per profile when the `claudeProfiles` dock preference is `separate`,
+each carrying a caption. The caption's height rides to Rust as `LayoutRequest.row_extra`, so
+`dock.rs` sizes the window and centres the bubble on the same rows the page draws.
+
+Each profile bubble shows its own directory's sessions and today: the CLI tags every
+`liveSessions.sessions[]` entry with `claudeConfigSourceId` (the popover picker's id, null for
+Claude Desktop transcripts) and, on the unscoped today request, adds `today` totals to each
+`claudeConfigs.options[]` entry. `glance.rs` passes the options through from the today key,
+and `src/lib/glance.ts` narrows sessions by source id and reads the option's `today`.
+
 ## Build a production package
 
 ```bash

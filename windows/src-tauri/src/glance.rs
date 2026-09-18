@@ -27,9 +27,10 @@ pub struct Today {
     pub cache_write_tokens: u64,
 }
 
-/// What the dock is handed. Both halves are optional and mean different things when absent:
-/// `live_sessions` absent is "the CLI never said", so the section hides rather than claiming
-/// nothing is running; `today` absent is "no today payload has come back yet".
+/// What the dock is handed. Every field is optional and each is absent for a reason of its
+/// own: `live_sessions` absent is "the CLI never said", so the section hides rather than
+/// claiming nothing is running; `today` absent is "no today payload has come back yet";
+/// `claude_configs` absent is either that or a CLI that knows a single directory.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glance {
@@ -37,6 +38,10 @@ pub struct Glance {
     /// reaches the page without a change here.
     pub live_sessions: Option<Value>,
     pub today: Option<Today>,
+    /// The payload's `claudeConfigs.options`, passed through untouched, so the dock can
+    /// draw one bubble per config directory with that directory's own today. Only the
+    /// today key writes it; a single-config CLI never sends it, and None keeps it hidden.
+    pub claude_configs: Option<Value>,
 }
 
 fn number(block: &Value, key: &str) -> f64 {
@@ -60,6 +65,12 @@ pub fn live_sessions_of(payload: &Value) -> Option<Value> {
     Some(block.clone())
 }
 
+pub fn claude_configs_of(payload: &Value) -> Option<Value> {
+    let options = payload.get("claudeConfigs")?.get("options")?;
+    options.as_array()?;
+    Some(options.clone())
+}
+
 pub fn today_of(payload: &Value) -> Option<Today> {
     let current = payload.get("current")?;
     Some(Today {
@@ -75,9 +86,17 @@ pub fn today_of(payload: &Value) -> Option<Today> {
 
 /// Whether this request is the one whose `current` block is today's. The popover fetches
 /// several keys and only this one answers "what has today cost": a week's totals under a
-/// heading that says Today would be a lie.
-pub fn is_today_key(period: &str, provider: &str, days: &[String], scope: &str) -> bool {
-    period == "today" && provider == "all" && scope == "local" && days.is_empty()
+/// heading that says Today would be a lie. `unscoped` is false when a Claude config source
+/// was requested: such a payload says what one directory cost, so it must not stand in for
+/// today's totals or for the per-directory options.
+pub fn is_today_key(
+    period: &str,
+    provider: &str,
+    days: &[String],
+    scope: &str,
+    unscoped: bool,
+) -> bool {
+    unscoped && period == "today" && provider == "all" && scope == "local" && days.is_empty()
 }
 
 #[derive(Default)]
@@ -102,6 +121,9 @@ impl GlanceCache {
         if is_today {
             if let Some(today) = today_of(payload) {
                 next.today = Some(today);
+            }
+            if let Some(options) = claude_configs_of(payload) {
+                next.claude_configs = Some(options);
             }
         }
         if guard.as_ref() == Some(&next) {
@@ -167,16 +189,19 @@ mod tests {
 
     #[test]
     fn only_the_today_key_may_write_todays_totals() {
-        assert!(is_today_key("today", "all", &[], "local"));
-        assert!(!is_today_key("week", "all", &[], "local"));
-        assert!(!is_today_key("today", "claude", &[], "local"));
-        assert!(!is_today_key("today", "all", &[], "combined"));
+        assert!(is_today_key("today", "all", &[], "local", true));
+        assert!(!is_today_key("week", "all", &[], "local", true));
+        assert!(!is_today_key("today", "claude", &[], "local", true));
+        assert!(!is_today_key("today", "all", &[], "combined", true));
         assert!(!is_today_key(
             "today",
             "all",
             &["2026-09-01".to_string()],
-            "local"
+            "local",
+            true
         ));
+        // A fetch scoped to one Claude config directory: today's shape, one directory's cost.
+        assert!(!is_today_key("today", "all", &[], "local", false));
     }
 
     #[test]
@@ -195,6 +220,32 @@ mod tests {
         assert!(cache.record(&payload(Some(live(1)), 9.0), true).is_none());
         assert!(cache.record(&payload(Some(live(2)), 9.0), true).is_some());
         assert!(cache.record(&payload(Some(live(2)), 9.5), true).is_some());
+    }
+
+    #[test]
+    fn the_today_key_carries_the_config_options_and_others_leave_them_alone() {
+        let cache = GlanceCache::new();
+        let mut with = payload(Some(live(1)), 9.0);
+        with["claudeConfigs"] = json!({ "selectedId": null, "options": [
+            { "id": "claude-config:a", "label": "Default", "path": "/a", "today": { "cost": 1.5 } },
+            { "id": "claude-config:b", "label": "Work", "path": "/b" },
+        ] });
+        assert!(cache.record(&with, true).is_some());
+        let snapshot = cache.snapshot().unwrap();
+        assert_eq!(snapshot.claude_configs.as_ref().unwrap()[1]["label"], "Work");
+
+        // A later non-today payload keeps what was cached, even when it carries a block of
+        // its own: only the today key speaks for the per-directory options.
+        let mut scoped = payload(Some(live(1)), 9.0);
+        scoped["claudeConfigs"] = json!({ "selectedId": "claude-config:b", "options": [
+            { "id": "claude-config:b", "label": "Work", "path": "/b", "today": { "cost": 7.0 } },
+        ] });
+        assert!(cache.record(&scoped, false).is_none());
+        assert_eq!(cache.snapshot().unwrap().claude_configs.unwrap()[0]["today"]["cost"], 1.5);
+
+        // A today payload without the block keeps it too: absent is "not sent", not "empty".
+        assert!(cache.record(&payload(Some(live(1)), 9.0), true).is_none());
+        assert_eq!(cache.snapshot().unwrap().claude_configs.unwrap()[1]["label"], "Work");
     }
 
     #[test]

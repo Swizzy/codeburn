@@ -4,7 +4,7 @@
 /// only what it finds here.
 import { open, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { claudeConfigSourceId, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeHomes, projectFromWorkDir, readState as readKimicodeState } from './providers/kimicode.js'
 import { reportedContextWindow } from './context-tree.js'
 import { modelRowKey } from './models.js'
@@ -38,6 +38,9 @@ export type LiveSession = {
   /// built. A session can be live but waiting on the user, which reads very
   /// differently from one that is generating.
   idleSeconds: number
+  /// The Claude config directory the transcript lives under, as the popover picker's id;
+  /// null for Claude Desktop transcripts and for other providers.
+  claudeConfigSourceId: string | null
 }
 
 export type LiveSessionsBlock = {
@@ -57,6 +60,9 @@ export type LiveSessionInput = {
   lastActivityMs: number
   /// Last-activity time of each sub-agent run belonging to this session.
   subagentActivityMs: number[]
+  /// The Claude config directory the transcript lives under, as the popover picker's id;
+  /// null for Claude Desktop transcripts and for other providers.
+  claudeConfigSourceId: string | null
 }
 
 /// Pure core: liveness and parent/sub-agent folding, newest first.
@@ -83,6 +89,7 @@ export function buildLiveSessions(
       startedAt: new Date(input.startedMs).toISOString(),
       lastActivityAt: new Date(activityOf(input)).toISOString(),
       idleSeconds: Math.max(0, Math.round((nowMs - activityOf(input)) / 1000)),
+      claudeConfigSourceId: input.claudeConfigSourceId,
     }))
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
   return { windowSeconds, sessions }
@@ -200,33 +207,36 @@ function parentTranscriptPath(sidechainPath: string): string | null {
   return `${sidechainPath.slice(0, marker)}.jsonl`
 }
 
-type FileTimes = { path: string; mtimeMs: number; birthtimeMs: number }
+type FileTimes = { path: string; mtimeMs: number; birthtimeMs: number; sourceId: string | null }
 
 /// Transcript roots, straight from the Claude config rather than through the
 /// provider registry. `discoverAllSessions` walks every provider's tree and
 /// costs about half a second on a large history; this block only ever reads
 /// Claude transcripts, and it runs on every payload build.
-async function transcriptRoots(): Promise<string[]> {
+async function transcriptRoots(): Promise<Array<{ root: string; sourceId: string | null }>> {
   const configured = await getClaudeConfigDirs().catch(() => [])
-  return [...configured.map(dir => join(dir, 'projects')), ...getDesktopSessionsDirs()]
+  return [
+    ...configured.map(dir => ({ root: join(dir, 'projects'), sourceId: claudeConfigSourceId(dir) })),
+    ...getDesktopSessionsDirs().map(root => ({ root, sourceId: null })),
+  ]
 }
 
 /// Every transcript touched inside the window. One recursive listing per root,
 /// then a stat per file: nothing is opened until it is known to be live.
 async function liveTranscripts(nowMs: number, windowMs: number): Promise<FileTimes[]> {
-  const paths: string[] = []
-  for (const root of await transcriptRoots()) {
+  const paths: Array<{ path: string; sourceId: string | null }> = []
+  for (const { root, sourceId } of await transcriptRoots()) {
     const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      paths.push(join(entry.parentPath, entry.name))
+      paths.push({ path: join(entry.parentPath, entry.name), sourceId })
     }
   }
-  const stats = await Promise.all(paths.map(async path => {
+  const stats = await Promise.all(paths.map(async ({ path, sourceId }) => {
     const info = await stat(path).catch(() => null)
     if (!info?.isFile()) return null
     if (nowMs - info.mtimeMs > windowMs) return null
-    return { path, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs }
+    return { path, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs, sourceId }
   }))
   return stats.filter((entry): entry is FileTimes => entry !== null)
 }
@@ -240,10 +250,15 @@ export async function collectLiveSessionInputs(
 ): Promise<LiveSessionInput[]> {
   const windowMs = windowSeconds * 1000
   const inputs = new Map<string, LiveSessionInput>()
-  type PendingSidechain = { sessionId: string; mtimeMs: number; path: string }
+  type PendingSidechain = { sessionId: string; mtimeMs: number; path: string; sourceId: string | null }
   const pendingSidechains: PendingSidechain[] = []
 
-  const toInput = (scan: ScannedFile, times: Omit<FileTimes, 'path'>, fallbackProject: string): LiveSessionInput => ({
+  const toInput = (
+    scan: ScannedFile,
+    times: Omit<FileTimes, 'path' | 'sourceId'>,
+    fallbackProject: string,
+    sourceId: string | null,
+  ): LiveSessionInput => ({
     id: scan.sessionId,
     provider: 'claude',
     project: scan.cwd ? basename(scan.cwd) : fallbackProject,
@@ -254,6 +269,7 @@ export async function collectLiveSessionInputs(
     startedMs: times.birthtimeMs,
     lastActivityMs: times.mtimeMs,
     subagentActivityMs: [],
+    claudeConfigSourceId: sourceId,
   })
 
   /// A parent whose own transcript is idle because its sub-agent is doing the
@@ -268,16 +284,17 @@ export async function collectLiveSessionInputs(
       scan,
       { mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs },
       basename(parentPath).replace(/\.jsonl$/, ''),
+      sidechain.sourceId,
     )
   }
 
   for (const file of await liveTranscripts(nowMs, windowMs)) {
     const scan = await scanTranscript(file.path)
     if (scan.isSidechain) {
-      pendingSidechains.push({ sessionId: scan.sessionId, mtimeMs: file.mtimeMs, path: file.path })
+      pendingSidechains.push({ sessionId: scan.sessionId, mtimeMs: file.mtimeMs, path: file.path, sourceId: file.sourceId })
       continue
     }
-    inputs.set(scan.sessionId, toInput(scan, file, basename(file.path).replace(/\.jsonl$/, '')))
+    inputs.set(scan.sessionId, toInput(scan, file, basename(file.path).replace(/\.jsonl$/, ''), file.sourceId))
   }
 
   // Claude writes the PARENT session id into every sidechain line, so the scan's
@@ -392,6 +409,7 @@ export async function collectKimicodeInputs(
       startedMs: state.createdAtMs || birthtimeMs,
       lastActivityMs: agents.mainMs,
       subagentActivityMs: agents.subagentMs,
+      claudeConfigSourceId: null,
     })
   }
   return inputs

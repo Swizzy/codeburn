@@ -214,6 +214,10 @@ pub struct LayoutRequest {
     pub total_rows: u32,
     pub expanded: bool,
     pub detail: Option<DetailRequest>,
+    /// Logical pixels the page adds to every row, for the profile caption under the
+    /// percent. Zero when no row carries one. Serde default keeps an older page valid.
+    #[serde(default)]
+    pub row_extra: i32,
 }
 
 /// Which end of the rail stays put while it grows.
@@ -246,6 +250,11 @@ pub struct DockFrame {
     rows_start: i32,
     #[serde(skip)]
     rows: u32,
+    /// The along-axis row extra the frame was laid out with, for hit-testing and the drop
+    /// settle: on a horizontal rail the caption grows the cross axis instead, so this is zero
+    /// there even though the page's `rowExtra` is not.
+    #[serde(skip)]
+    row_extra: i32,
     pub rail: Rect,
     pub edge: Edge,
     pub vertical: bool,
@@ -258,13 +267,13 @@ pub struct DockFrame {
     pub native_pointer: bool,
 }
 
-fn rail_length(m: &Metrics, rows: u32, pad: i32) -> i32 {
-    pad * 2 + rows_extent(m, rows)
+fn rail_length(m: &Metrics, rows: u32, pad: i32, row_extra: i32) -> i32 {
+    pad * 2 + rows_extent(m, rows, row_extra)
 }
 
-fn rows_extent(m: &Metrics, rows: u32) -> i32 {
+fn rows_extent(m: &Metrics, rows: u32, row_extra: i32) -> i32 {
     let rows = rows.max(1) as i32;
-    rows * m.row_height + (rows - 1) * m.row_spacing
+    rows * (m.row_height + row_extra) + (rows - 1) * m.row_spacing
 }
 
 fn denormalize(norm: Option<f64>, low: i32, high: i32, fallback: i32) -> i32 {
@@ -312,8 +321,12 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
     let vertical = edge.is_vertical();
     let docked = placement.docked.is_some();
     let pad = m.rail_along_pad + if docked { m.flare_compensation } else { 0 };
-    let cross = if vertical { m.rail_width } else { m.horizontal_rail_width };
-    let rest_len = rail_length(m, 1, pad);
+    // A caption grows the row's content stack: on a vertical rail that stack runs along the
+    // rail, on a horizontal one it runs across it, so only one of the two axes grows.
+    let along_extra = if vertical { request.row_extra } else { 0 };
+    let cross = if vertical { m.rail_width } else { m.horizontal_rail_width + request.row_extra };
+    let row_height = m.row_height + along_extra;
+    let rest_len = rail_length(m, 1, pad, along_extra);
 
     // Along axis: y for vertical rails, x for horizontal ones. Cross axis is the other.
     let (area_along, area_along_len, area_cross, area_cross_len) = if vertical {
@@ -342,7 +355,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
 
     let anchor = anchor_for(area_along, area_along_len, rest_start, rest_len);
     let rail_along = |rows: u32| -> (i32, i32) {
-        let len = rail_length(m, rows, pad);
+        let len = rail_length(m, rows, pad, along_extra);
         let high = (area_along + area_along_len - EDGE_INSET - len).max(along_low);
         let start = match anchor {
             Anchor::Start => rest_start,
@@ -403,12 +416,12 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
 
     let rows_start = match anchor {
         Anchor::Start => rail_start + pad,
-        Anchor::End => rail_start + rail_len - pad - rows_extent(m, shown_rows),
+        Anchor::End => rail_start + rail_len - pad - rows_extent(m, shown_rows, along_extra),
     };
     let detail = request.detail.map(|d| {
         let w = m.detail_width.min(window.w);
         let h = d.height.clamp(1, m.detail_max_height).min(window.h);
-        let row_mid = rows_start + d.row as i32 * (m.row_height + m.row_spacing) + m.row_height / 2;
+        let row_mid = rows_start + d.row as i32 * (row_height + m.row_spacing) + row_height / 2;
         let desired = match bubble_side {
             Edge::Left => Rect { x: rail.x - DETAIL_GAP - w, y: row_mid - h / 2, w, h },
             Edge::Right => Rect { x: rail.right() + DETAIL_GAP, y: row_mid - h / 2, w, h },
@@ -424,6 +437,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
         window,
         rows_start,
         rows: shown_rows,
+        row_extra: along_extra,
         rail: rail.offset(-window.x, -window.y),
         edge,
         vertical,
@@ -729,7 +743,7 @@ static STATE: Mutex<DockState> = Mutex::new(DockState {
         detail_max_height: 423,
         detail_overhang: 160,
     },
-    request: LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None },
+    request: LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None, row_extra: 0 },
     frame: None,
     area: Rect { x: 0, y: 0, w: 0, h: 0 },
     scale: 1.0,
@@ -1109,8 +1123,9 @@ fn pointer_tick(app: &AppHandle, window: &tauri::WebviewWindow) -> u64 {
         if !primary_button_down() {
             let rail = frame.rail.offset(frame.window.x, frame.window.y);
             // The padding the frame was laid out with, so the resting length is the one this
-            // very rail collapses to rather than one for a docking it has not made yet.
-            let rest_len = rail_length(&state.metrics, 1, frame.along_pad);
+            // very rail collapses to rather than one for a docking it has not made yet. The
+            // caption height comes from the same frame for the same reason.
+            let rest_len = rail_length(&state.metrics, 1, frame.along_pad, frame.row_extra);
             let placement =
                 placement_for_drop(&rail, rest_len, &screen, &state.placement.clone().unwrap_or_default());
             drop(state);
@@ -1193,9 +1208,10 @@ fn pointer_tick(app: &AppHandle, window: &tauri::WebviewWindow) -> u64 {
         if along < 0 {
             return None;
         }
-        let period = metrics.row_height + metrics.row_spacing;
+        let row_height = metrics.row_height + frame.row_extra;
+        let period = row_height + metrics.row_spacing;
         let slot = along / period;
-        (slot < frame.rows as i32 && along - slot * period < metrics.row_height).then_some(slot as u32)
+        (slot < frame.rows as i32 && along - slot * period < row_height).then_some(slot as u32)
     }).flatten();
     let detail_hovered = frame
         .detail
@@ -1352,7 +1368,7 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
                 .title("CodeBurn Capacity Dock")
                 .inner_size(
                     metrics.rail_width as f64,
-                    rail_length(&metrics, 1, metrics.rail_along_pad + metrics.flare_compensation) as f64,
+                    rail_length(&metrics, 1, metrics.rail_along_pad + metrics.flare_compensation, 0) as f64,
                 )
                 .decorations(false)
                 .resizable(false)
@@ -1384,7 +1400,7 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
         let mut state = lock();
         *state = DockState::default();
         state.metrics = Metrics::from_prefs();
-        state.request = LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None };
+        state.request = LayoutRequest { rows: 1, total_rows: 1, ..LayoutRequest::default() };
         state.scale = 1.0;
     }
     relayout(&window);
@@ -1594,7 +1610,92 @@ mod tests {
     }
 
     fn request(rows: u32, expanded: bool, detail: Option<DetailRequest>) -> LayoutRequest {
-        LayoutRequest { rows, total_rows: rows, expanded, detail }
+        LayoutRequest { rows, total_rows: rows, expanded, detail, row_extra: 0 }
+    }
+
+    #[test]
+    fn a_caption_stretches_every_row_and_the_bubble_follows_the_row_centre() {
+        let m = small();
+        let area = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let placement = Placement { attachment: Edge::Right, docked: Some(Edge::Right), x: None, y: None, monitor: None };
+        let plain = layout(area, &placement, &request(3, true, None), &m);
+        let mut with_caption = request(3, true, None);
+        with_caption.row_extra = 14;
+        let tall = layout(area, &placement, &with_caption, &m);
+        assert_eq!(tall.rail.h - plain.rail.h, 3 * 14);
+
+        let mut hovered = with_caption;
+        hovered.detail = Some(DetailRequest { row: 1, height: 200 });
+        let framed = layout(area, &placement, &hovered, &m);
+        let detail = framed.detail.unwrap();
+        let row_mid = framed.rows_start - framed.window.y + (m.row_height + 14 + m.row_spacing) + (m.row_height + 14) / 2;
+        assert_eq!(detail.y + detail.tail, row_mid);
+    }
+
+    /// On a horizontal rail the row's content stack runs across the rail, not along it, so the
+    /// caption has to grow `rail.h` (the cross axis) rather than `rail.w` (the along axis) --
+    /// the opposite of the vertical rail above.
+    #[test]
+    fn a_caption_on_a_horizontal_rail_stretches_across_not_along() {
+        let m = small();
+        let area = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let placement = Placement { attachment: Edge::Bottom, docked: Some(Edge::Bottom), x: None, y: None, monitor: None };
+        let plain = layout(area, &placement, &request(3, true, None), &m);
+        let mut with_caption = request(3, true, None);
+        with_caption.row_extra = 14;
+        let tall = layout(area, &placement, &with_caption, &m);
+
+        assert_eq!(tall.rail.h - plain.rail.h, 14);
+        assert_eq!(tall.rail.w, plain.rail.w);
+
+        // The along-axis extra the frame carries for hit-testing and the drop settle stays
+        // zero on a horizontal rail, even though the page's rowExtra was 14.
+        assert_eq!(tall.row_extra, 0);
+
+        // The same request on a vertical rail, for contrast: over the same along-axis padding
+        // its along axis grows by one caption per row, which is what the horizontal one above
+        // did not do.
+        let upright =
+            Placement { attachment: Edge::Right, docked: Some(Edge::Right), x: None, y: None, monitor: None };
+        let standing = layout(area, &upright, &with_caption, &m);
+        assert_eq!(standing.along_pad, tall.along_pad);
+        assert_eq!(standing.rail.h - tall.rail.w, 3 * 14);
+    }
+
+    /// `pointer_tick` reads `frame.row_extra` for the same reason it reads `frame.along_pad`:
+    /// the resting length it hands `placement_for_drop` has to match the one `layout` itself
+    /// will use to normalize the stored offset, or the rail settles short of where it was let
+    /// go by the caption height every time a row carries one.
+    #[test]
+    fn a_dropped_rail_with_a_caption_rests_at_the_length_it_was_laid_out_with() {
+        let m = small();
+        let here = screen(AREA, "one");
+        let floating =
+            Placement { docked: None, attachment: Edge::Right, x: Some(0.5), y: Some(0.2), monitor: None };
+        let mut showing = request(4, true, None);
+        showing.row_extra = 14;
+
+        // What the pointer is holding: four rows of rail, each a caption taller.
+        let held = layout(AREA, &floating, &showing, &m);
+        assert_eq!(held.row_extra, 14);
+        let rest_len = rail_length(&m, 1, held.along_pad, held.row_extra);
+        assert_eq!(rest_len, rail_length(&m, 1, held.along_pad, 0) + 14);
+
+        // Carried well clear of every edge and let go there: relaying the stored placement out
+        // lands the rail exactly where it was released, because rest_len matches what `layout`
+        // normalizes against internally.
+        let released = rail_on_screen(&held).offset(-260, 90);
+        let dropped = placement_for_drop(&released, rest_len, &here, &floating);
+        let landed = rail_on_screen(&layout(AREA, &dropped, &showing, &m));
+        assert_eq!(landed, released);
+
+        // Had the caption height been left out of rest_len (the bug this guards against), the
+        // offset would be normalized against a rail 14 pixels shorter than the one it actually
+        // collapses to, so relaying it out drifts off the drop point by that much.
+        let short_rest_len = rail_length(&m, 1, held.along_pad, 0);
+        let mis_dropped = placement_for_drop(&released, short_rest_len, &here, &floating);
+        let mis_landed = rail_on_screen(&layout(AREA, &mis_dropped, &showing, &m));
+        assert_ne!(mis_landed, released);
     }
 
     fn rail_on_screen(frame: &DockFrame) -> Rect {
@@ -1661,13 +1762,13 @@ mod tests {
         let rest = layout(
             AREA,
             &Placement::default(),
-            &LayoutRequest { rows: 1, total_rows: 3, expanded: false, detail: None },
+            &LayoutRequest { rows: 1, total_rows: 3, expanded: false, detail: None, row_extra: 0 },
             &m,
         );
         let expanded = layout(
             AREA,
             &Placement::default(),
-            &LayoutRequest { rows: 3, total_rows: 3, expanded: true, detail: Some(DetailRequest { row: 0, height: 200 }) },
+            &LayoutRequest { rows: 3, total_rows: 3, expanded: true, detail: Some(DetailRequest { row: 0, height: 200 }), row_extra: 0 },
             &m,
         );
         assert_eq!(rest.window, expanded.window);
@@ -1740,7 +1841,7 @@ mod tests {
             let frame = layout(
                 AREA,
                 &placement,
-                &LayoutRequest { rows: 1, total_rows: 1, expanded, detail: None },
+                &LayoutRequest { rows: 1, total_rows: 1, expanded, detail: None, row_extra: 0 },
                 &m,
             );
             let rail = rail_on_screen(&frame);
@@ -1815,7 +1916,7 @@ mod tests {
 
         // What the pointer is holding: four rows of rail, not the one row it rests at.
         let held = layout(AREA, &floating, &showing, &m);
-        let rest_len = rail_length(&m, 1, held.along_pad);
+        let rest_len = rail_length(&m, 1, held.along_pad, 0);
         assert_eq!((held.anchor, held.rail.h, rest_len), (Anchor::Start, 245, 74));
 
         // Carried well clear of every edge and let go there.

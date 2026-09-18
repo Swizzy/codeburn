@@ -22,6 +22,7 @@ import {
   writeDockPrefs,
   type DockPrefs,
 } from './lib/dockPrefs'
+import { expandClaudeProfiles, hasProfileRows, providerKey, type DockRow } from './lib/dockRows'
 import {
   EMPTY_GLANCE,
   compactTokens,
@@ -35,6 +36,7 @@ import {
   subscribeDailyBudget,
   subscribeGlance,
   thousands,
+  todayFor,
   usd,
   type Glance,
   type LiveSession,
@@ -67,7 +69,6 @@ import {
   type GaugeShape,
   type GlanceMetrics,
   type Metrics,
-  type QuotaWindow,
   type Severity,
 } from './dockGeometry'
 import { track } from './lib/telemetry'
@@ -82,13 +83,16 @@ const PROVIDER_NAMES: Record<string, string> = {
   kimi: 'Kimi',
 }
 
-type Provider = {
-  id: string
-  name: string
-  available: boolean
-  plan?: string
-  windows: QuotaWindow[]
-  error?: string
+type Provider = DockRow
+
+/// What a row is called: a profile row carries its provider's name so nothing downstream
+/// tells the user to sign in to an app named after a directory.
+function rowTitle(provider: Provider): string {
+  return provider.profile ? `${PROVIDER_NAMES[provider.profile.providerId] ?? provider.profile.providerId} · ${provider.profile.label}` : provider.name
+}
+
+function providerName(provider: Provider): string {
+  return PROVIDER_NAMES[providerKey(provider)] ?? provider.name
 }
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -246,16 +250,17 @@ function Row({ m, shape, provider, loading, style, onEnter, onLeave, onClick }: 
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onClick={onClick}
-      aria-label={`${provider.name} usage`}
+      aria-label={`${rowTitle(provider)} usage`}
     >
       <span className="dock-gauge">
         <Ring m={m} shape={shape} percent={percent} />
         <span className={`dock-glyph${loading ? ' is-loading' : ''}`}>
-          <ProviderGlyph id={provider.id} size={m.providerIconSize} />
+          <ProviderGlyph id={providerKey(provider)} size={m.providerIconSize} />
         </span>
         {provider.error ? <span className="dock-row-alert" /> : null}
       </span>
       <span className={`dock-pct${sev ? ` is-${sev}` : ' is-empty'}`}>{percent === null ? '--' : `${percent}%`}</span>
+      {provider.profile ? <span className="dock-caption">{provider.profile.label}</span> : null}
     </button>
   )
 }
@@ -270,7 +275,7 @@ function connectionAction(provider: Provider): 'Connect' | 'Reconnect' | null {
 /// The mac says "Add API Key" where the provider's only credential is a token. Here that is
 /// the same two providers whose settings pane offers a paste field.
 function actionTitle(provider: Provider, action: 'Connect' | 'Reconnect'): string {
-  return ACCEPTS_KEY.includes(provider.id) ? 'Add API Key' : action
+  return ACCEPTS_KEY.includes(providerKey(provider)) ? 'Add API Key' : action
 }
 
 function checkedLabel(fetchedAt: number, now: number): string {
@@ -295,7 +300,7 @@ function footerLines(provider: Provider, fetchedAt: number | null, now: number):
 function instruction(provider: Provider, quota: QuotaState): string {
   if (quota.cliOutdated) return 'CLI update needed for live quota. Run npm install -g codeburn.'
   if (quota.error) return quota.error
-  return `Sign in with the ${provider.name} app or CLI. The dock checks again on the quota refresh cadence.`
+  return `Sign in with the ${providerName(provider)} app or CLI. The dock checks again on the quota refresh cadence.`
 }
 
 /// A percentage drawn as its own gauge (PercentGaugeText): the glyphs sit dim, and the
@@ -392,21 +397,32 @@ function Detail({
   const g = glanceMetrics(m.detailScale)
   const now = Date.now()
   const connection: Connection = loading ? 'loading' : connectionFor(provider, quota)
-  const sessions = sessionsFor(glance, provider.id)
-  const today = glance.today
+  // A profile row shows its own directory's sessions and spend; the plain Claude row shows
+  // everything under Claude, as before.
+  const sessions = provider.profile
+    ? sessionsFor(glance, providerKey(provider), provider.profile.sourceId)
+    : sessionsFor(glance, provider.id)
+  const today = provider.profile ? todayFor(glance, provider.profile.sourceId) : glance.today
   const windows = provider.windows.slice(0, MAX_WINDOW_COLUMNS)
   const footer = footerLines(provider, fetchedAt, now)
   const action = loading ? null : connectionAction(provider)
   // A single window has no siblings to line up with, so it reads as a left-aligned figure
   // rather than as a lone centred digit.
   const windowAlign = windows.length === 1 ? 'start' : 'center'
+  // No budget armed reads as "no budget set" regardless of today. With one armed, a plain row
+  // prints today against it as it always has, counting a missing today as nothing spent; a
+  // profile row whose own directory's payload has not come back yet cannot say that much, so
+  // it stays blank rather than reporting a zero it never read.
+  const budgetLine = budget && budget > 0
+    ? (provider.profile && !today ? null : `today ${usd(today?.cost ?? 0)} of ${usd(budget)}`)
+    : 'no budget set'
   return (
     <div className="dock-glance">
       <header className="dock-glance-head has-rule">
         <span className="dock-glance-glyph">
-          <ProviderGlyph id={provider.id} size={m.detailGlyphSize} />
+          <ProviderGlyph id={providerKey(provider)} size={m.detailGlyphSize} />
         </span>
-        <span className="dock-glance-name">{provider.name}</span>
+        <span className="dock-glance-name">{rowTitle(provider)}</span>
         {provider.plan ? <span className="dock-glance-plan">{provider.plan}</span> : null}
       </header>
 
@@ -473,9 +489,7 @@ function Detail({
       {drawsWindows(connection) ? (
         <section className={`dock-glance-windows${footer.length > 0 ? ' has-rule' : ''}`}>
           {windows.length === 0 ? (
-            <p className="dock-budget-line">
-              {budget && budget > 0 ? `today ${usd(today?.cost ?? 0)} of ${usd(budget)}` : 'no budget set'}
-            </p>
+            budgetLine ? <p className="dock-budget-line">{budgetLine}</p> : null
           ) : (
             <div className="dock-window-row" style={{ textAlign: windowAlign }}>
               {windows.map((row) => {
@@ -514,8 +528,8 @@ function Detail({
           <button
             type="button"
             className="dock-connect"
-            style={{ background: providerColor(provider.id) }}
-            onClick={() => void invoke('open_settings_window', { section: provider.id })}
+            style={{ background: providerColor(providerKey(provider)) }}
+            onClick={() => void invoke('open_settings_window', { section: providerKey(provider) })}
           >
             {actionTitle(provider, action)}
           </button>
@@ -539,6 +553,8 @@ function dockVars(m: Metrics): CSSProperties {
     '--dock-alert-size': `${m.alertSize}px`,
     // The mac hangs the badge 19 points out from the ring centre, at 12 points across.
     '--dock-alert-inset': `${Math.round(m.ringSize / 2 - m.alertOffset - m.alertSize / 2)}px`,
+    '--dock-caption-size': `${m.profileCaptionSize}px`,
+    '--dock-caption-line': `${m.profileCaptionHeight}px`,
     '--glance-inset': `${g.inset}px`,
     '--glance-head-title': `${g.headerTitle}px`,
     '--glance-head-pad-bottom': `${g.headerPadBottom}px`,
@@ -675,22 +691,31 @@ export function Dock() {
   // Providers: the ones the CLI reports signed in, narrowed to the settings window's choice
   // when one has been made, else the preferred one as a dashed stand-in. An empty choice is
   // "nobody has picked yet", which is why it means everything rather than nothing.
-  const all = quota.providers
+  // With separate profiles on, the Claude row is one row per config directory; the
+  // preference set and the resting provider still speak of plain `claude`.
+  const all = expandClaudeProfiles(quota.providers, quota.claudeProfiles, prefs.claudeProfiles)
   const signedIn = all.filter((p) => p.available)
   const chosenIds = prefs.providers
   // A chosen provider stays on the rail after it drops out, as it does on the mac: a dashed
   // ring and a Reconnect button say more than a row that quietly disappeared. Nothing chosen
   // yet means everything signed in, which is what the empty set is for until the seed runs.
-  const available = chosenIds.length > 0 ? all.filter((p) => chosenIds.includes(p.id)) : signedIn
+  const available = chosenIds.length > 0 ? all.filter((p) => chosenIds.includes(providerKey(p))) : signedIn
   const resolvedPreferredId =
-    normalizedPreferred(prefs.preferred, available.map((p) => p.id)) ?? prefs.preferred ?? all[0]?.id ?? 'claude'
-  const preferred: Provider = all.find((p) => p.id === resolvedPreferredId) ?? {
+    normalizedPreferred(prefs.preferred, available.map(providerKey)) ??
+    prefs.preferred ??
+    (all[0] ? providerKey(all[0]) : undefined) ??
+    'claude'
+  const preferred: Provider = all.find((p) => providerKey(p) === resolvedPreferredId) ?? {
     id: resolvedPreferredId,
     name: PROVIDER_NAMES[resolvedPreferredId] ?? resolvedPreferredId,
     available: false,
     windows: [],
   }
   const selected = available.length > 0 ? available : [preferred]
+  // A caption row's content stack is taller; every selected row follows so the rail stays
+  // uniform and does not change height while it opens or closes, and Rust is told the same
+  // number so the window and the bubble line up with what the page draws.
+  const rowExtra = hasProfileRows(selected) ? m.profileCaptionHeight + m.ringLabelSpacing : 0
   const displayed = presentationExpanded
     ? [preferred, ...selected.filter((p) => p.id !== preferred.id)]
     : [preferred]
@@ -957,10 +982,11 @@ export function Dock() {
     if (interactionRef.current.dragging) return
     cancel('expand')
     cancel('collapse')
-    if (provider.id !== resolvedPreferredId) {
-      track('dock_provider_switch', { provider: provider.id })
-      setPrefs((current) => ({ ...current, preferred: provider.id }))
-      void invoke('dock_set_preferred', { id: provider.id })
+    const key = providerKey(provider)
+    if (key !== resolvedPreferredId) {
+      track('dock_provider_switch', { provider: key })
+      setPrefs((current) => ({ ...current, preferred: key }))
+      void invoke('dock_set_preferred', { id: key })
       setInteraction((i) => (i.pinned ? i : { ...i, pinned: true }))
     } else {
       setInteraction((i) => ({ ...i, pinned: !i.pinned }))
@@ -985,7 +1011,7 @@ export function Dock() {
   useEffect(() => {
     let stale = false
     void invoke<DockFrame>('dock_set_layout', {
-      request: { rows, totalRows, expanded: presentationExpanded, detail: detailRequest },
+      request: { rows, totalRows, expanded: presentationExpanded, detail: detailRequest, rowExtra },
     }).then((next) => {
       if (!stale) setFrame(next)
     })
@@ -994,7 +1020,7 @@ export function Dock() {
     }
     // detailRequest is derived from the two scalars below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, totalRows, presentationExpanded, detailRow, detailHeight, m])
+  }, [rows, totalRows, presentationExpanded, detailRow, detailHeight, m, rowExtra])
 
   // Entering: the card is placed while invisible, then slides in on the next frame.
   const detailPlaced = frame?.detail != null && detailRequest != null
@@ -1033,10 +1059,13 @@ export function Dock() {
   const bubbleFill = bubbleGlass ? 'url(#dock-glass-fill)' : 'url(#dock-rail-fill)'
   const edge = flareEdge
   const vertical = railVertical
-  const cross = vertical ? m.railWidth : m.horizontalRailWidth
+  // A caption grows the row's content stack: on a vertical rail that stack runs along the
+  // rail, on a horizontal one it runs across it, so only one of the two axes grows.
+  const alongExtra = vertical ? rowExtra : 0
+  const cross = vertical ? m.railWidth : m.horizontalRailWidth + rowExtra
   const pad = alongPad(m, attachment)
-  const restLength = railLength(m, 1, attachment)
-  const targetLength = railLength(m, rows, attachment)
+  const restLength = railLength(m, 1, attachment, alongExtra)
+  const targetLength = railLength(m, rows, attachment, alongExtra)
   const bodyLength = Math.round(restLength + (targetLength - restLength) * progress)
   const railRect = frame?.rail ?? { x: 0, y: 0, w: cross, h: restLength }
   // The frame's rail is the target; the visual rail grows from the anchored end toward it.
@@ -1162,7 +1191,7 @@ export function Dock() {
                 loading={loading}
                 style={{
                   width: vertical ? cross - m.railCrossPad * 2 : m.rowHeight,
-                  height: vertical ? m.rowHeight : cross - m.railCrossPad * 2,
+                  height: vertical ? m.rowHeight + rowExtra : cross - m.railCrossPad * 2,
                   opacity: isPreferred ? 1 : progress,
                   transform: vertical ? `translateY(${reveal}px)` : `translateX(${reveal}px)`,
                 }}

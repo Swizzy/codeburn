@@ -13,8 +13,8 @@ import { applyTheme } from '../lib/settings'
 import { TRAY_BADGE_SUPPORTED, homePath } from '../lib/platform'
 import { summaryFor, type QuotaState } from '../lib/quota'
 import {
-  DEFAULT_DOCK_PREFS, DOCK_DETAIL_THEMES, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN, DOCK_SCALE_STEP,
-  DOCK_THEMES, canDeselect, loadDockPrefs, manageableProviders, onDockPrefsChanged,
+  DEFAULT_DOCK_PREFS, DOCK_CLAUDE_PROFILE_MODES, DOCK_DETAIL_THEMES, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN,
+  DOCK_SCALE_STEP, DOCK_THEMES, canDeselect, loadDockPrefs, manageableProviders, onDockPrefsChanged,
   writeDockPrefs, type DockPrefs,
 } from '../lib/dockPrefs'
 import { ProviderGlyph } from '../providerIcons'
@@ -417,6 +417,20 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
           />
         }
       />
+      {quota.claudeProfiles.length > 1 && (
+        <Row
+          label="Claude profiles"
+          hint="One ring per Claude config directory. The list is under Providers > Claude config directories."
+          control={
+            <Select
+              ariaLabel="Capacity Dock Claude profiles"
+              value={prefs.claudeProfiles}
+              options={DOCK_CLAUDE_PROFILE_MODES}
+              onChange={claudeProfiles => apply({ claudeProfiles })}
+            />
+          }
+        />
+      )}
       {manageable.length === 0 ? (
         <Note>Connect a provider from its page in the sidebar to make it available here.</Note>
       ) : (
