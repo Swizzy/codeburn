@@ -63,6 +63,8 @@ export type DockPrefs = {
   /// Latches once the user edits the provider set, so auto-seeding stops second-guessing them.
   manualSelection: boolean
   claudeProfiles: DockClaudeProfilesMode
+  /// Keeps every selected ring out at rest instead of collapsing to the resting provider.
+  keepExpanded: boolean
 }
 
 export const DEFAULT_DOCK_PREFS: DockPrefs = {
@@ -75,6 +77,7 @@ export const DEFAULT_DOCK_PREFS: DockPrefs = {
   providers: [],
   manualSelection: false,
   claudeProfiles: 'combined',
+  keepExpanded: false,
 }
 
 export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
@@ -89,6 +92,7 @@ export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
     providers: Array.isArray(raw.providers) ? raw.providers.filter((p): p is string => typeof p === 'string') : [],
     manualSelection: raw.manualSelection === true,
     claudeProfiles: raw.claudeProfiles === 'separate' ? 'separate' : 'combined',
+    keepExpanded: raw.keepExpanded === true,
   }
 }
 

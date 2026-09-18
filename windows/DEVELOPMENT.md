@@ -149,6 +149,10 @@ Claude Desktop transcripts) and, on the unscoped today request, adds `today` tot
 `claudeConfigs.options[]` entry. `glance.rs` passes the options through from the today key,
 and `src/lib/glance.ts` narrows sessions by source id and reads the option's `today`.
 
+The `keepExpanded` dock preference (Settings > General > Capacity Dock > Keep expanded) makes
+the rail read as pinned, so every selected ring stays out at rest and the hover-out collapse
+never runs.
+
 ## Build a production package
 
 ```bash
