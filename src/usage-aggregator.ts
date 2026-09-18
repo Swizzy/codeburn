@@ -1685,8 +1685,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
 
   // The dock's per-profile bubbles read today's spend per config directory. Only the
   // unscoped today request can say it: that is the one whose scan is exactly today's
-  // sessions, and `scanProjects` is already in hand, so this costs no parse.
-  if (claudeConfigs && !isClaudeConfigScoped && rangeStartStr === todayStr && rangeEndStr === todayStr) {
+  // sessions, and `scanProjects` is already in hand, so this costs no parse. A
+  // provider scope other than all/claude narrows `scanProjects` to that provider's
+  // own corpus (see buildDurablePeriod's provider-scoped branch), so it holds no
+  // Claude sessions to sum and the block is skipped rather than lying with zeros.
+  if (claudeConfigs && !isClaudeConfigScoped && (isAllProviders || pf === 'claude') && rangeStartStr === todayStr && rangeEndStr === todayStr) {
     claudeConfigs = withClaudeConfigToday(claudeConfigs, scanProjects)
   }
 

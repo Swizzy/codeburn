@@ -73,13 +73,25 @@ function sessionFor(sourceId: string, sourceLabel: string, sourcePath: string) {
   }
 }
 
+// sessionFor hardcodes sessionId `sess-${sourceId}`, so a second call for the same
+// source would collide with the first under canonical session dedup
+// (uniqueCanonicalSessionCountFromProjects keys on provider+projectPath+sessionId).
+// Give proj-b's second session its own id (and keep its turn's sessionId in step)
+// so the fixture actually holds two distinct sessions, not one counted twice.
+const bSecond = sessionFor('claude-config:b', 'B', '/b')
+const bSecondDistinct = {
+  ...bSecond,
+  sessionId: 'sess-claude-config:b-2',
+  turns: bSecond.turns.map(turn => ({ ...turn, sessionId: 'sess-claude-config:b-2' })),
+}
+
 const projects = [{
   project: 'proj-a', projectPath: 'proj-a',
   sessions: [sessionFor('claude-config:a', 'A', '/a')],
   totalCostUSD: 0.02, totalSavingsUSD: 7, totalApiCalls: 1,
 }, {
   project: 'proj-b', projectPath: 'proj-b',
-  sessions: [sessionFor('claude-config:b', 'B', '/b'), sessionFor('claude-config:b', 'B', '/b')],
+  sessions: [sessionFor('claude-config:b', 'B', '/b'), bSecondDistinct],
   totalCostUSD: 0.04, totalSavingsUSD: 14, totalApiCalls: 2,
 }] as unknown as ProjectSummary[]
 
@@ -97,15 +109,13 @@ describe('withClaudeConfigToday', () => {
     const out = withClaudeConfigToday(selector, projects)
     const a = out.options[0].today!
     const b = out.options[1].today!
-    // sessionFor hardcodes apiCalls: 1 regardless of its two assistantCalls, and both
-    // proj-b sessions share sessionId `sess-claude-config:b`, so they collapse to one
-    // canonical session (see uniqueCanonicalSessionCountFromProjects). Asserted against
-    // that actual, correctly-computed behavior rather than the brief's literal 2/4/2.
+    // sessionFor hardcodes apiCalls: 1 regardless of its two assistantCalls, so calls
+    // sum to session counts (1, 2), not assistantCalls counts (2, 4).
     expect(a.calls).toBe(1)
     expect(b.calls).toBe(2)
     expect(b.cost).toBeCloseTo(a.cost * 2, 6)
     expect(a.sessions).toBe(1)
-    expect(b.sessions).toBe(1)
+    expect(b.sessions).toBe(2)
   })
 
   it('gives an option with no sessions today a zero block rather than none', () => {

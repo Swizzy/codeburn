@@ -128,3 +128,23 @@ describe('buildMenubarPayloadForRange: hydration freshness marker', () => {
     expect(payload.stale).toBeUndefined()
   })
 })
+
+describe('buildMenubarPayloadForRange: per-config today only on an all/Claude scope', () => {
+  beforeAll(async () => {
+    await loadPricing()
+  })
+
+  it('omits today under a non-Claude provider scope and includes it unscoped', async () => {
+    const scoped = await buildMenubarPayloadForRange(getDateRange('today'), {
+      provider: 'codex',
+      optimize: false,
+    })
+    expect(scoped.claudeConfigs?.options[0]).not.toHaveProperty('today')
+
+    const unscoped = await buildMenubarPayloadForRange(getDateRange('today'), {
+      provider: 'all',
+      optimize: false,
+    })
+    expect(unscoped.claudeConfigs?.options[0]).toHaveProperty('today')
+  })
+})
