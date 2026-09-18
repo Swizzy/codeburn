@@ -5,7 +5,7 @@
 // desktop app runs. They are deliberately left untouched by this change; the
 // two trees will be deduped in a follow-up once every surface reads the CLI.
 
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 import { claudeConfigSourceId, getClaudeConfigDirs } from '../providers/claude.js'
 import { renderTable } from '../text-table.js'
@@ -147,7 +147,7 @@ export async function collectQuota(options: {
     return { providers }
   }
   const readProfile = options.readClaudeProfile ?? readClaudeProfileFrom
-  const labels = uniqueProfileLabels(dirs.map(dir => claudeProfileLabel(dir, dirname(dir))))
+  const labels = uniqueProfileLabels(dirs.map(dir => claudeProfileLabel(dir)))
   const claudeProfiles = await Promise.all(dirs.map(async (dir, index) => {
     const quota = await readWithTimeout(signal => readProfile(dir, signal), timeoutMs)
     const base = quota === 'timeout' ? TIMED_OUT : toCommandProvider('claude', 'Claude', quota)
