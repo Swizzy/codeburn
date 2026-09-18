@@ -250,7 +250,9 @@ pub struct DockFrame {
     rows_start: i32,
     #[serde(skip)]
     rows: u32,
-    /// The row height the frame was laid out with, less the metric, for hit-testing.
+    /// The along-axis row extra the frame was laid out with, for hit-testing and the drop
+    /// settle: on a horizontal rail the caption grows the cross axis instead, so this is zero
+    /// there even though the page's `rowExtra` is not.
     #[serde(skip)]
     row_extra: i32,
     pub rail: Rect,
@@ -319,9 +321,12 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
     let vertical = edge.is_vertical();
     let docked = placement.docked.is_some();
     let pad = m.rail_along_pad + if docked { m.flare_compensation } else { 0 };
-    let cross = if vertical { m.rail_width } else { m.horizontal_rail_width };
-    let row_height = m.row_height + request.row_extra;
-    let rest_len = rail_length(m, 1, pad, request.row_extra);
+    // A caption grows the row's content stack: on a vertical rail that stack runs along the
+    // rail, on a horizontal one it runs across it, so only one of the two axes grows.
+    let along_extra = if vertical { request.row_extra } else { 0 };
+    let cross = if vertical { m.rail_width } else { m.horizontal_rail_width + request.row_extra };
+    let row_height = m.row_height + along_extra;
+    let rest_len = rail_length(m, 1, pad, along_extra);
 
     // Along axis: y for vertical rails, x for horizontal ones. Cross axis is the other.
     let (area_along, area_along_len, area_cross, area_cross_len) = if vertical {
@@ -350,7 +355,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
 
     let anchor = anchor_for(area_along, area_along_len, rest_start, rest_len);
     let rail_along = |rows: u32| -> (i32, i32) {
-        let len = rail_length(m, rows, pad, request.row_extra);
+        let len = rail_length(m, rows, pad, along_extra);
         let high = (area_along + area_along_len - EDGE_INSET - len).max(along_low);
         let start = match anchor {
             Anchor::Start => rest_start,
@@ -411,7 +416,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
 
     let rows_start = match anchor {
         Anchor::Start => rail_start + pad,
-        Anchor::End => rail_start + rail_len - pad - rows_extent(m, shown_rows, request.row_extra),
+        Anchor::End => rail_start + rail_len - pad - rows_extent(m, shown_rows, along_extra),
     };
     let detail = request.detail.map(|d| {
         let w = m.detail_width.min(window.w);
@@ -432,7 +437,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
         window,
         rows_start,
         rows: shown_rows,
-        row_extra: request.row_extra,
+        row_extra: along_extra,
         rail: rail.offset(-window.x, -window.y),
         edge,
         vertical,
@@ -1625,6 +1630,29 @@ mod tests {
         let detail = framed.detail.unwrap();
         let row_mid = framed.rows_start - framed.window.y + (m.row_height + 14 + m.row_spacing) + (m.row_height + 14) / 2;
         assert_eq!(detail.y + detail.tail, row_mid);
+    }
+
+    /// On a horizontal rail the row's content stack runs across the rail, not along it, so the
+    /// caption has to grow `rail.h` (the cross axis) rather than `rail.w` (the along axis) --
+    /// the opposite of the vertical rail above.
+    #[test]
+    fn a_caption_on_a_horizontal_rail_stretches_across_not_along() {
+        let m = small();
+        let area = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let placement = Placement { attachment: Edge::Bottom, docked: Some(Edge::Bottom), x: None, y: None, monitor: None };
+        let plain = layout(area, &placement, &request(3, true, None), &m);
+        let mut with_caption = request(3, true, None);
+        with_caption.row_extra = 14;
+        let tall = layout(area, &placement, &with_caption, &m);
+
+        assert_eq!(tall.rail.h - plain.rail.h, 14);
+        assert_eq!(tall.rail.w, plain.rail.w);
+
+        // The along-axis extra the frame carries for hit-testing and the drop settle stays
+        // zero on a horizontal rail, even though the page's rowExtra was 14.
+        assert_eq!(tall.row_extra, 0);
+        let rest_len = rail_length(&m, 1, tall.along_pad, tall.row_extra);
+        assert_eq!(rest_len, rail_length(&m, 1, tall.along_pad, 0));
     }
 
     /// `pointer_tick` reads `frame.row_extra` for the same reason it reads `frame.along_pad`:
