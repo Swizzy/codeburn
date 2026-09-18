@@ -85,9 +85,17 @@ pub fn today_of(payload: &Value) -> Option<Today> {
 
 /// Whether this request is the one whose `current` block is today's. The popover fetches
 /// several keys and only this one answers "what has today cost": a week's totals under a
-/// heading that says Today would be a lie.
-pub fn is_today_key(period: &str, provider: &str, days: &[String], scope: &str) -> bool {
-    period == "today" && provider == "all" && scope == "local" && days.is_empty()
+/// heading that says Today would be a lie. `unscoped` is false when a Claude config source
+/// was requested: such a payload says what one directory cost, so it must not stand in for
+/// today's totals or for the per-directory options.
+pub fn is_today_key(
+    period: &str,
+    provider: &str,
+    days: &[String],
+    scope: &str,
+    unscoped: bool,
+) -> bool {
+    unscoped && period == "today" && provider == "all" && scope == "local" && days.is_empty()
 }
 
 #[derive(Default)]
@@ -180,16 +188,19 @@ mod tests {
 
     #[test]
     fn only_the_today_key_may_write_todays_totals() {
-        assert!(is_today_key("today", "all", &[], "local"));
-        assert!(!is_today_key("week", "all", &[], "local"));
-        assert!(!is_today_key("today", "claude", &[], "local"));
-        assert!(!is_today_key("today", "all", &[], "combined"));
+        assert!(is_today_key("today", "all", &[], "local", true));
+        assert!(!is_today_key("week", "all", &[], "local", true));
+        assert!(!is_today_key("today", "claude", &[], "local", true));
+        assert!(!is_today_key("today", "all", &[], "combined", true));
         assert!(!is_today_key(
             "today",
             "all",
             &["2026-09-01".to_string()],
-            "local"
+            "local",
+            true
         ));
+        // A fetch scoped to one Claude config directory: today's shape, one directory's cost.
+        assert!(!is_today_key("today", "all", &[], "local", false));
     }
 
     #[test]
@@ -222,9 +233,18 @@ mod tests {
         let snapshot = cache.snapshot().unwrap();
         assert_eq!(snapshot.claude_configs.as_ref().unwrap()[1]["label"], "Work");
 
-        // A later non-today payload, or one without the block, keeps what was cached.
-        assert!(cache.record(&payload(Some(live(1)), 9.0), false).is_none());
+        // A later non-today payload keeps what was cached, even when it carries a block of
+        // its own: only the today key speaks for the per-directory options.
+        let mut scoped = payload(Some(live(1)), 9.0);
+        scoped["claudeConfigs"] = json!({ "selectedId": "claude-config:b", "options": [
+            { "id": "claude-config:b", "label": "Work", "path": "/b", "today": { "cost": 7.0 } },
+        ] });
+        assert!(cache.record(&scoped, false).is_none());
         assert_eq!(cache.snapshot().unwrap().claude_configs.unwrap()[0]["today"]["cost"], 1.5);
+
+        // A today payload without the block keeps it too: absent is "not sent", not "empty".
+        assert!(cache.record(&payload(Some(live(1)), 9.0), true).is_none());
+        assert_eq!(cache.snapshot().unwrap().claude_configs.unwrap()[1]["label"], "Work");
     }
 
     #[test]
