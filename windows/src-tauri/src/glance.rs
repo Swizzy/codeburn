@@ -37,6 +37,10 @@ pub struct Glance {
     /// reaches the page without a change here.
     pub live_sessions: Option<Value>,
     pub today: Option<Today>,
+    /// The payload's `claudeConfigs.options`, passed through untouched, so the dock can
+    /// draw one bubble per config directory with that directory's own today. Only the
+    /// today key writes it; a single-config CLI never sends it, and None keeps it hidden.
+    pub claude_configs: Option<Value>,
 }
 
 fn number(block: &Value, key: &str) -> f64 {
@@ -58,6 +62,12 @@ pub fn live_sessions_of(payload: &Value) -> Option<Value> {
     let block = payload.get("liveSessions")?;
     block.get("sessions")?.as_array()?;
     Some(block.clone())
+}
+
+pub fn claude_configs_of(payload: &Value) -> Option<Value> {
+    let options = payload.get("claudeConfigs")?.get("options")?;
+    options.as_array()?;
+    Some(options.clone())
 }
 
 pub fn today_of(payload: &Value) -> Option<Today> {
@@ -102,6 +112,9 @@ impl GlanceCache {
         if is_today {
             if let Some(today) = today_of(payload) {
                 next.today = Some(today);
+            }
+            if let Some(options) = claude_configs_of(payload) {
+                next.claude_configs = Some(options);
             }
         }
         if guard.as_ref() == Some(&next) {
@@ -195,6 +208,23 @@ mod tests {
         assert!(cache.record(&payload(Some(live(1)), 9.0), true).is_none());
         assert!(cache.record(&payload(Some(live(2)), 9.0), true).is_some());
         assert!(cache.record(&payload(Some(live(2)), 9.5), true).is_some());
+    }
+
+    #[test]
+    fn the_today_key_carries_the_config_options_and_others_leave_them_alone() {
+        let cache = GlanceCache::new();
+        let mut with = payload(Some(live(1)), 9.0);
+        with["claudeConfigs"] = json!({ "selectedId": null, "options": [
+            { "id": "claude-config:a", "label": "Default", "path": "/a", "today": { "cost": 1.5 } },
+            { "id": "claude-config:b", "label": "Work", "path": "/b" },
+        ] });
+        assert!(cache.record(&with, true).is_some());
+        let snapshot = cache.snapshot().unwrap();
+        assert_eq!(snapshot.claude_configs.as_ref().unwrap()[1]["label"], "Work");
+
+        // A later non-today payload, or one without the block, keeps what was cached.
+        assert!(cache.record(&payload(Some(live(1)), 9.0), false).is_none());
+        assert_eq!(cache.snapshot().unwrap().claude_configs.unwrap()[0]["today"]["cost"], 1.5);
     }
 
     #[test]
