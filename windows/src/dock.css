@@ -166,8 +166,9 @@
 .dock-pct.is-critical { color: var(--dock-orange); }
 .dock-pct.is-danger { color: var(--dock-red); }
 
-/* The profile caption on a per-directory Claude row. Its height is reserved by the row
-   metric (`rowExtra` in Dock.tsx), never by the text, so the rail stays a whole pixel. */
+/* The profile caption on a per-directory Claude row. The row reserves the caption line plus
+   the ring gap above it (`rowExtra` in Dock.tsx), never the text itself, so the rail stays a
+   whole pixel. */
 .dock-caption {
   height: var(--dock-caption-line);
   line-height: var(--dock-caption-line);
