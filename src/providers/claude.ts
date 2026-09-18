@@ -33,7 +33,9 @@ function dedupeResolved(paths: string[]): string[] {
   return out
 }
 
-function claudeConfigSourceId(path: string): string {
+/// The popover config picker's id for a Claude config directory. Exported so
+/// `codeburn quota` can key its Claude profiles the same way.
+export function claudeConfigSourceId(path: string): string {
   return 'claude-config:' + createHash('sha256').update(path).digest('hex').slice(0, 16)
 }
 

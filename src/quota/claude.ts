@@ -150,3 +150,36 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
     return { quota: empty('transientFailure') }
   }
 }
+
+/// The Capacity Dock's caption for a Claude config directory. The default `~/.claude`
+/// is "Default"; any other directory reads as its basename with a leading dot and a
+/// leading `claude-` dropped, so `~/.claude-work` is "Work". `home` is injectable for tests.
+export function claudeProfileLabel(dir: string, home: string = os.homedir()): string {
+  const normalized = path.resolve(dir)
+  if (normalized === path.resolve(path.join(home, '.claude'))) {
+    return 'Default'
+  }
+  const stripped = path.basename(normalized).replace(/^\./, '').replace(/^claude-/i, '').trim()
+  if (stripped.length === 0) {
+    return normalized
+  }
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1)
+}
+
+/// Two directories can share a basename; the duplicates are numbered in list order so
+/// every caption stays distinct.
+export function uniqueProfileLabels(labels: string[]): string[] {
+  const counts = new Map<string, number>()
+  for (const label of labels) {
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  const seen = new Map<string, number>()
+  return labels.map(label => {
+    if ((counts.get(label) ?? 0) <= 1) {
+      return label
+    }
+    const index = (seen.get(label) ?? 0) + 1
+    seen.set(label, index)
+    return `${label} ${index}`
+  })
+}
