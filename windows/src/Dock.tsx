@@ -85,6 +85,16 @@ const PROVIDER_NAMES: Record<string, string> = {
 
 type Provider = DockRow
 
+/// What a row is called: a profile row carries its provider's name so nothing downstream
+/// tells the user to sign in to an app named after a directory.
+function rowTitle(provider: Provider): string {
+  return provider.profile ? `${PROVIDER_NAMES[provider.profile.providerId] ?? provider.profile.providerId} · ${provider.profile.label}` : provider.name
+}
+
+function providerName(provider: Provider): string {
+  return PROVIDER_NAMES[providerKey(provider)] ?? provider.name
+}
+
 type Rect = { x: number; y: number; w: number; h: number }
 type DockFrame = {
   rail: Rect
@@ -240,7 +250,7 @@ function Row({ m, shape, provider, loading, style, onEnter, onLeave, onClick }: 
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onClick={onClick}
-      aria-label={`${provider.profile ? `Claude · ${provider.profile.label}` : provider.name} usage`}
+      aria-label={`${rowTitle(provider)} usage`}
     >
       <span className="dock-gauge">
         <Ring m={m} shape={shape} percent={percent} />
@@ -290,7 +300,7 @@ function footerLines(provider: Provider, fetchedAt: number | null, now: number):
 function instruction(provider: Provider, quota: QuotaState): string {
   if (quota.cliOutdated) return 'CLI update needed for live quota. Run npm install -g codeburn.'
   if (quota.error) return quota.error
-  return `Sign in with the ${provider.name} app or CLI. The dock checks again on the quota refresh cadence.`
+  return `Sign in with the ${providerName(provider)} app or CLI. The dock checks again on the quota refresh cadence.`
 }
 
 /// A percentage drawn as its own gauge (PercentGaugeText): the glyphs sit dim, and the
@@ -408,7 +418,7 @@ function Detail({
         <span className="dock-glance-glyph">
           <ProviderGlyph id={providerKey(provider)} size={m.detailGlyphSize} />
         </span>
-        <span className="dock-glance-name">{provider.profile ? `Claude · ${provider.profile.label}` : provider.name}</span>
+        <span className="dock-glance-name">{rowTitle(provider)}</span>
         {provider.plan ? <span className="dock-glance-plan">{provider.plan}</span> : null}
       </header>
 
