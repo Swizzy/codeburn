@@ -1651,8 +1651,15 @@ mod tests {
         // The along-axis extra the frame carries for hit-testing and the drop settle stays
         // zero on a horizontal rail, even though the page's rowExtra was 14.
         assert_eq!(tall.row_extra, 0);
-        let rest_len = rail_length(&m, 1, tall.along_pad, tall.row_extra);
-        assert_eq!(rest_len, rail_length(&m, 1, tall.along_pad, 0));
+
+        // The same request on a vertical rail, for contrast: over the same along-axis padding
+        // its along axis grows by one caption per row, which is what the horizontal one above
+        // did not do.
+        let upright =
+            Placement { attachment: Edge::Right, docked: Some(Edge::Right), x: None, y: None, monitor: None };
+        let standing = layout(area, &upright, &with_caption, &m);
+        assert_eq!(standing.along_pad, tall.along_pad);
+        assert_eq!(standing.rail.h - tall.rail.w, 3 * 14);
     }
 
     /// `pointer_tick` reads `frame.row_extra` for the same reason it reads `frame.along_pad`:

@@ -409,9 +409,13 @@ function Detail({
   // A single window has no siblings to line up with, so it reads as a left-aligned figure
   // rather than as a lone centred digit.
   const windowAlign = windows.length === 1 ? 'start' : 'center'
-  // No budget armed reads as "no budget set" regardless of today; a budget with no today yet
-  // (a profile row whose payload hasn't come back) has nothing true to print, so it stays blank.
-  const budgetLine = budget && budget > 0 ? (today ? `today ${usd(today.cost)} of ${usd(budget)}` : null) : 'no budget set'
+  // No budget armed reads as "no budget set" regardless of today. With one armed, a plain row
+  // prints today against it as it always has, counting a missing today as nothing spent; a
+  // profile row whose own directory's payload has not come back yet cannot say that much, so
+  // it stays blank rather than reporting a zero it never read.
+  const budgetLine = budget && budget > 0
+    ? (provider.profile && !today ? null : `today ${usd(today?.cost ?? 0)} of ${usd(budget)}`)
+    : 'no budget set'
   return (
     <div className="dock-glance">
       <header className="dock-glance-head has-rule">

@@ -27,9 +27,10 @@ pub struct Today {
     pub cache_write_tokens: u64,
 }
 
-/// What the dock is handed. Both halves are optional and mean different things when absent:
-/// `live_sessions` absent is "the CLI never said", so the section hides rather than claiming
-/// nothing is running; `today` absent is "no today payload has come back yet".
+/// What the dock is handed. Every field is optional and each is absent for a reason of its
+/// own: `live_sessions` absent is "the CLI never said", so the section hides rather than
+/// claiming nothing is running; `today` absent is "no today payload has come back yet";
+/// `claude_configs` absent is either that or a CLI that knows a single directory.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glance {

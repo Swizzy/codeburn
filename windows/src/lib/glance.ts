@@ -42,14 +42,14 @@ export type GlanceToday = {
 
 export type GlanceConfigOption = { id: string; label: string; path: string; today?: GlanceToday }
 
-/// Both halves are absent for different reasons: no live-session block means the CLI never
+/// Each field is absent for a reason of its own: no live-session block means the CLI never
 /// said (so the section hides rather than claiming nothing is running), no today means no
-/// today payload has come back yet.
+/// today payload has come back yet, and no config directories means either that or a CLI that
+/// knows a single directory.
 export type Glance = {
   liveSessions: LiveSessionsBlock | null
   today: GlanceToday | null
-  /// The CLI's config directories with each one's today, from the today payload; null until
-  /// one has come back or when the CLI knows a single directory.
+  /// The CLI's config directories with each one's today, from the today payload.
   claudeConfigs: GlanceConfigOption[] | null
 }
 
@@ -99,7 +99,9 @@ export function sessionSubtitle(session: LiveSession, now = Date.now()): string 
 
 /// Sessions the CLI reported under this provider, narrowed to one config directory when
 /// asked. A session an older CLI left untagged belongs to no profile and is left out of a
-/// narrowed answer rather than shown under every profile.
+/// narrowed answer rather than shown under every profile. Null when the payload carried no
+/// block at all: the section hides rather than saying "none running" on a CLI that cannot
+/// answer.
 export function sessionsFor(glance: Glance, providerId: string, sourceId?: string): LiveSession[] | null {
   if (!glance.liveSessions) return null
   return glance.liveSessions.sessions.filter((session) =>
