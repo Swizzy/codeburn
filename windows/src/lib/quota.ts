@@ -84,8 +84,12 @@ export type QuotaProvider = {
   error?: string
 }
 
+/// One Claude config directory's quota, the CLI's `claudeProfiles[]` entry. Present only
+/// when the CLI knows two or more directories.
+export type ClaudeProfile = QuotaProvider & { label: string; path: string }
+
 export type DockQuota =
-  | { state: 'ready'; providers: QuotaProvider[] }
+  | { state: 'ready'; providers: QuotaProvider[]; claudeProfiles: ClaudeProfile[] }
   | { state: 'cliOutdated' }
   | { state: 'unavailable'; message: string }
 
@@ -116,6 +120,8 @@ export type QuotaSummary = {
 export type QuotaState = {
   /// The last answer that parsed, kept across a failed refresh so the bars do not blink out.
   providers: QuotaProvider[]
+  /// The per-directory Claude rows the dock may draw instead of the single one above.
+  claudeProfiles: ClaudeProfile[]
   loading: boolean
   /// Set once a refresh has failed and the last good answer is what is on screen.
   retrying: boolean
@@ -126,6 +132,7 @@ export type QuotaState = {
 
 export const EMPTY_QUOTA: QuotaState = {
   providers: [],
+  claudeProfiles: [],
   loading: false,
   retrying: false,
   cliOutdated: false,
@@ -232,6 +239,7 @@ async function run(): Promise<void> {
         failures = 0
         publish({
           providers: answer.providers,
+          claudeProfiles: Array.isArray(answer.claudeProfiles) ? answer.claudeProfiles : [],
           loading: false,
           retrying: false,
           cliOutdated: false,

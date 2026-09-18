@@ -25,6 +25,15 @@ export const DOCK_GAUGE_SHAPES: Array<{ id: DockGaugeShape; label: string }> = [
   { id: 'squircle', label: 'Squircle' },
 ]
 
+export type DockClaudeProfilesMode = 'combined' | 'separate'
+
+/// Whether the rail draws one Claude ring or one per configured config directory. The
+/// directories themselves are the popover's list under Providers > Claude config directories.
+export const DOCK_CLAUDE_PROFILE_MODES: Array<{ id: DockClaudeProfilesMode; label: string }> = [
+  { id: 'combined', label: 'Combined' },
+  { id: 'separate', label: 'Separate rings' },
+]
+
 /// CapacityDockPreferences.scaleRange and its 0.05 step.
 export const DOCK_SCALE_MIN = 0.6
 export const DOCK_SCALE_MAX = 1.2
@@ -43,6 +52,7 @@ export type DockPrefs = {
   providers: string[]
   /// Latches once the user edits the provider set, so auto-seeding stops second-guessing them.
   manualSelection: boolean
+  claudeProfiles: DockClaudeProfilesMode
 }
 
 export const DEFAULT_DOCK_PREFS: DockPrefs = {
@@ -53,6 +63,7 @@ export const DEFAULT_DOCK_PREFS: DockPrefs = {
   gaugeShape: 'circle',
   providers: [],
   manualSelection: false,
+  claudeProfiles: 'combined',
 }
 
 export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
@@ -65,6 +76,7 @@ export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
     gaugeShape: raw.gaugeShape === 'squircle' ? 'squircle' : 'circle',
     providers: Array.isArray(raw.providers) ? raw.providers.filter((p): p is string => typeof p === 'string') : [],
     manualSelection: raw.manualSelection === true,
+    claudeProfiles: raw.claudeProfiles === 'separate' ? 'separate' : 'combined',
   }
 }
 
