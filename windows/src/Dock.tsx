@@ -682,7 +682,10 @@ export function Dock() {
   // yet means everything signed in, which is what the empty set is for until the seed runs.
   const available = chosenIds.length > 0 ? all.filter((p) => chosenIds.includes(providerKey(p))) : signedIn
   const resolvedPreferredId =
-    normalizedPreferred(prefs.preferred, available.map(providerKey)) ?? prefs.preferred ?? all[0]?.id ?? 'claude'
+    normalizedPreferred(prefs.preferred, available.map(providerKey)) ??
+    prefs.preferred ??
+    (all[0] ? providerKey(all[0]) : undefined) ??
+    'claude'
   const preferred: Provider = all.find((p) => providerKey(p) === resolvedPreferredId) ?? {
     id: resolvedPreferredId,
     name: PROVIDER_NAMES[resolvedPreferredId] ?? resolvedPreferredId,
@@ -690,15 +693,16 @@ export function Dock() {
     windows: [],
   }
   const selected = available.length > 0 ? available : [preferred]
+  // A caption row's content stack is taller; every selected row follows so the rail stays
+  // uniform and does not change height while it opens or closes, and Rust is told the same
+  // number so the window and the bubble line up with what the page draws.
+  const rowExtra = hasProfileRows(selected) ? m.profileCaptionHeight + m.ringLabelSpacing : 0
   const displayed = presentationExpanded
     ? [preferred, ...selected.filter((p) => p.id !== preferred.id)]
     : [preferred]
   const anchor = frame?.anchor ?? 'start'
   const ordered = anchor === 'end' ? [...displayed].reverse() : displayed
   orderedRef.current = ordered
-  // A caption row is taller; every row follows so the rail stays uniform, and Rust is told
-  // the same number so the window and the bubble line up with what the page draws.
-  const rowExtra = hasProfileRows(ordered) ? m.profileCaptionHeight : 0
   const loading = quota.fetchedAt === null && quota.error === null
 
   const expanded = isExpanded(interaction)
@@ -1032,10 +1036,13 @@ export function Dock() {
   const surfaceFill = glass ? 'url(#dock-glass-fill)' : 'url(#dock-rail-fill)'
   const edge = flareEdge
   const vertical = railVertical
-  const cross = vertical ? m.railWidth : m.horizontalRailWidth
+  // A caption grows the row's content stack: on a vertical rail that stack runs along the
+  // rail, on a horizontal one it runs across it, so only one of the two axes grows.
+  const alongExtra = vertical ? rowExtra : 0
+  const cross = vertical ? m.railWidth : m.horizontalRailWidth + rowExtra
   const pad = alongPad(m, attachment)
-  const restLength = railLength(m, 1, attachment, rowExtra)
-  const targetLength = railLength(m, rows, attachment, rowExtra)
+  const restLength = railLength(m, 1, attachment, alongExtra)
+  const targetLength = railLength(m, rows, attachment, alongExtra)
   const bodyLength = Math.round(restLength + (targetLength - restLength) * progress)
   const railRect = frame?.rail ?? { x: 0, y: 0, w: cross, h: restLength }
   // The frame's rail is the target; the visual rail grows from the anchored end toward it.
@@ -1160,7 +1167,7 @@ export function Dock() {
                 provider={provider}
                 loading={loading}
                 style={{
-                  width: vertical ? cross - m.railCrossPad * 2 : m.rowHeight + rowExtra,
+                  width: vertical ? cross - m.railCrossPad * 2 : m.rowHeight,
                   height: vertical ? m.rowHeight + rowExtra : cross - m.railCrossPad * 2,
                   opacity: isPreferred ? 1 : progress,
                   transform: vertical ? `translateY(${reveal}px)` : `translateX(${reveal}px)`,
