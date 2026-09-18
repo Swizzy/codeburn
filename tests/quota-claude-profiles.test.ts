@@ -1,11 +1,12 @@
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import { claudeConfigSourceId } from '../src/providers/claude.js'
 import { claudeProfileLabel, uniqueProfileLabels } from '../src/quota/claude.js'
 import { collectQuota, renderQuotaTable } from '../src/quota/index.js'
 import type { QuotaProvider } from '../src/quota/types.js'
+import { setHome } from './setup/home.js'
 
 const HOME = process.platform === 'win32' ? 'C:\\Users\\me' : '/home/me'
 
@@ -54,6 +55,8 @@ function connected(percent: number): QuotaProvider {
 
 describe('collectQuota Claude profiles', () => {
   const dirs = [join(HOME, '.claude'), join(HOME, '.claude-work')]
+
+  beforeEach(() => setHome(HOME))
 
   it('emits one profile per config dir, keyed and labelled, when there are two or more', async () => {
     const seen: string[] = []
