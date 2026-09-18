@@ -36,6 +36,7 @@ import {
   subscribeDailyBudget,
   subscribeGlance,
   thousands,
+  todayFor,
   usd,
   type Glance,
   type LiveSession,
@@ -239,7 +240,7 @@ function Row({ m, shape, provider, loading, style, onEnter, onLeave, onClick }: 
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onClick={onClick}
-      aria-label={`${provider.name} usage`}
+      aria-label={`${provider.profile ? `Claude · ${provider.profile.label}` : provider.name} usage`}
     >
       <span className="dock-gauge">
         <Ring m={m} shape={shape} percent={percent} />
@@ -386,22 +387,28 @@ function Detail({
   const g = glanceMetrics(m.detailScale)
   const now = Date.now()
   const connection: Connection = loading ? 'loading' : connectionFor(provider, quota)
-  // Sessions and today's spend are Claude-wide; a profile row would mislabel them as its own.
-  const sessions = provider.profile ? null : sessionsFor(glance, provider.id)
-  const today = provider.profile ? null : glance.today
+  // A profile row shows its own directory's sessions and spend; the plain Claude row shows
+  // everything under Claude, as before.
+  const sessions = provider.profile
+    ? sessionsFor(glance, providerKey(provider), provider.profile.sourceId)
+    : sessionsFor(glance, provider.id)
+  const today = provider.profile ? todayFor(glance, provider.profile.sourceId) : glance.today
   const windows = provider.windows.slice(0, MAX_WINDOW_COLUMNS)
   const footer = footerLines(provider, fetchedAt, now)
   const action = loading ? null : connectionAction(provider)
   // A single window has no siblings to line up with, so it reads as a left-aligned figure
   // rather than as a lone centred digit.
   const windowAlign = windows.length === 1 ? 'start' : 'center'
+  // No budget armed reads as "no budget set" regardless of today; a budget with no today yet
+  // (a profile row whose payload hasn't come back) has nothing true to print, so it stays blank.
+  const budgetLine = budget && budget > 0 ? (today ? `today ${usd(today.cost)} of ${usd(budget)}` : null) : 'no budget set'
   return (
     <div className="dock-glance">
       <header className="dock-glance-head has-rule">
         <span className="dock-glance-glyph">
           <ProviderGlyph id={providerKey(provider)} size={m.detailGlyphSize} />
         </span>
-        <span className="dock-glance-name">{provider.name}</span>
+        <span className="dock-glance-name">{provider.profile ? `Claude · ${provider.profile.label}` : provider.name}</span>
         {provider.plan ? <span className="dock-glance-plan">{provider.plan}</span> : null}
       </header>
 
@@ -468,9 +475,7 @@ function Detail({
       {drawsWindows(connection) ? (
         <section className={`dock-glance-windows${footer.length > 0 ? ' has-rule' : ''}`}>
           {windows.length === 0 ? (
-            <p className="dock-budget-line">
-              {budget && budget > 0 ? `today ${usd(today?.cost ?? 0)} of ${usd(budget)}` : 'no budget set'}
-            </p>
+            budgetLine ? <p className="dock-budget-line">{budgetLine}</p> : null
           ) : (
             <div className="dock-window-row" style={{ textAlign: windowAlign }}>
               {windows.map((row) => {

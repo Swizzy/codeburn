@@ -8,7 +8,9 @@ import type { ClaudeProfile, QuotaProvider } from './quota'
 export type DockRow = QuotaProvider & {
   /// Set on a per-directory Claude row: which provider it belongs to for glyphs, colours,
   /// the settings deep link and the resting preference, and the caption under its ring.
-  profile?: { providerId: string; label: string }
+  /// `sourceId` is the CLI profile's own id (the `claude-config:...` string), used to narrow
+  /// the bubble's sessions and today to this directory.
+  profile?: { providerId: string; label: string; sourceId: string }
 }
 
 export function expandClaudeProfiles(
@@ -30,7 +32,7 @@ export function expandClaudeProfiles(
     windows: profile.windows,
     ...(profile.plan ? { plan: profile.plan } : {}),
     ...(profile.error ? { error: profile.error } : {}),
-    profile: { providerId: 'claude', label: profile.label },
+    profile: { providerId: 'claude', label: profile.label, sourceId: profile.id },
   }))
   return [...providers.slice(0, at), ...rows, ...providers.slice(at + 1)]
 }

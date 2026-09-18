@@ -22,8 +22,8 @@ describe('expandClaudeProfiles', () => {
   it('replaces the claude row in place with one row per profile', () => {
     const rows = expandClaudeProfiles([codex, claude], profiles, 'separate')
     expect(rows.map(r => r.id)).toEqual(['codex', 'claude:claude-config:aa', 'claude:claude-config:bb'])
-    expect(rows[1]).toMatchObject({ name: 'Default', available: true, profile: { providerId: 'claude', label: 'Default' } })
-    expect(rows[2]).toMatchObject({ name: 'Work', available: false, error: 'Not connected', profile: { providerId: 'claude', label: 'Work' } })
+    expect(rows[1]).toMatchObject({ name: 'Default', available: true, profile: { providerId: 'claude', label: 'Default', sourceId: 'claude-config:aa' } })
+    expect(rows[2]).toMatchObject({ name: 'Work', available: false, error: 'Not connected', profile: { providerId: 'claude', label: 'Work', sourceId: 'claude-config:bb' } })
     expect(rows[1].windows).toEqual(profiles[0].windows)
   })
 
