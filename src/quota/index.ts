@@ -5,7 +5,8 @@
 // desktop app runs. They are deliberately left untouched by this change; the
 // two trees will be deduped in a follow-up once every surface reads the CLI.
 
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 import { claudeConfigSourceId, getClaudeConfigDirs } from '../providers/claude.js'
 import { renderTable } from '../text-table.js'
@@ -140,9 +141,30 @@ async function readWithTimeout(
   }
 }
 
-function readClaudeProfileFrom(dir: string, signal: AbortSignal): Promise<QuotaProvider> {
+/** One config directory's Claude quota: the same endpoint the `claude` row reads, against
+ *  that directory's own credential file rather than the default one. */
+export function readClaudeProfileFrom(dir: string, signal: AbortSignal): Promise<QuotaProvider> {
   return fetchClaudeQuota({ signal, credentialPath: join(dir, '.credentials.json') }).then(result => result.quota)
 }
+
+/** A directory's answer as a provider row, under the same timeout every reader gets. */
+async function readProfileBase(
+  dir: string,
+  read: (dir: string, signal: AbortSignal) => Promise<QuotaProvider>,
+  timeoutMs: number,
+): Promise<QuotaCommandProvider> {
+  const quota = await readWithTimeout(signal => read(dir, signal), timeoutMs)
+  if (quota === 'timeout') {
+    return TIMED_OUT
+  }
+  return toCommandProvider('claude', 'Claude', quota)
+}
+
+/** Stands in for the default directory's answer until the provider reads have settled:
+ *  `~/.claude` is what the `claude` row already asked for, and asking again would spend a
+ *  second request on the same credential. */
+const REUSE_CLAUDE_ROW = Symbol('reuse the claude row')
+type PendingProfile = { dir: string; label: string; base: QuotaCommandProvider | typeof REUSE_CLAUDE_ROW }
 
 export async function collectQuota(options: {
   readers?: { id: ProviderName; name: string; read: ProviderReader }[]
@@ -152,13 +174,35 @@ export async function collectQuota(options: {
 } = {}): Promise<QuotaReport> {
   const readers = options.readers ?? availableReaders()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const providers = await Promise.all(readers.map(async entry => {
+  // Providers and profiles read as one wave: the profile reads start before the provider
+  // ones are awaited, so a stalled reader on each side costs one timeout, not two in a row.
+  const dirsPromise = options.claudeConfigDirs ? Promise.resolve(options.claudeConfigDirs) : getClaudeConfigDirs()
+  const providersPromise = Promise.all(readers.map(async entry => {
     const quota = await readWithTimeout(entry.read, timeoutMs)
     if (quota === 'timeout') {
       return { id: entry.id, name: entry.name, available: false, windows: [], error: 'Timed out.' }
     }
     return toCommandProvider(entry.id, entry.name, quota)
   }))
+  // An injected reader belongs to a caller that wants every directory read, so the default
+  // directory is only reused when this module's own reader is the one doing the reading.
+  const readProfile = options.readClaudeProfile ?? readClaudeProfileFrom
+  const defaultDir = options.readClaudeProfile ? null : resolve(homedir(), '.claude')
+  const profilesPromise = dirsPromise.then(async (dirs): Promise<PendingProfile[] | undefined> => {
+    if (dirs.length < 2) {
+      return undefined
+    }
+    const labels = uniqueProfileLabels(dirs.map(dir => claudeProfileLabel(dir)))
+    return await Promise.all(dirs.map(async (dir, index): Promise<PendingProfile> => {
+      if (defaultDir !== null && resolve(dir) === defaultDir) {
+        return { dir, label: labels[index], base: REUSE_CLAUDE_ROW }
+      }
+      return { dir, label: labels[index], base: await readProfileBase(dir, readProfile, timeoutMs) }
+    }))
+  })
+
+  const [providers, pending] = await Promise.all([providersPromise, profilesPromise])
+
   // ZCode and Z.ai read the same endpoint and report the same plan numbers
   // whenever both credentials belong to one z.ai account: showing both is a
   // duplicate row. The deliberately configured Z.ai credential (Keychain,
@@ -173,17 +217,16 @@ export async function collectQuota(options: {
       zaiRow.notes = [...(zaiRow.notes ?? []), 'A ZCode app login is also connected; it reads the same z.ai plan endpoint and is hidden as a duplicate.']
     }
   }
-
-  const dirs = options.claudeConfigDirs ?? await getClaudeConfigDirs()
-  if (dirs.length < 2) {
+  if (!pending) {
     return { providers }
   }
-  const readProfile = options.readClaudeProfile ?? readClaudeProfileFrom
-  const labels = uniqueProfileLabels(dirs.map(dir => claudeProfileLabel(dir)))
-  const claudeProfiles = await Promise.all(dirs.map(async (dir, index) => {
-    const quota = await readWithTimeout(signal => readProfile(dir, signal), timeoutMs)
-    const base = quota === 'timeout' ? TIMED_OUT : toCommandProvider('claude', 'Claude', quota)
-    return { ...base, id: claudeConfigSourceId(dir), label: labels[index], path: dir }
+  const claudeRow = providers.find(entry => entry.id === 'claude')
+  const claudeProfiles = await Promise.all(pending.map(async entry => {
+    // A readers list without Claude leaves nothing to reuse, so that directory is read after all.
+    const base = entry.base === REUSE_CLAUDE_ROW
+      ? claudeRow ?? await readProfileBase(entry.dir, readProfile, timeoutMs)
+      : entry.base
+    return { ...base, id: claudeConfigSourceId(entry.dir), label: entry.label, path: entry.dir }
   }))
   return { providers, claudeProfiles }
 }
@@ -194,30 +237,43 @@ function resetLabel(iso: string | undefined): string {
   return Number.isNaN(at.getTime()) ? '' : at.toLocaleString()
 }
 
+function pushQuotaRows(
+  rows: string[][],
+  title: string,
+  entry: { windows: QuotaCommandWindow[]; error?: string; notes?: string[] },
+): void {
+  if (entry.windows.length === 0) {
+    rows.push([title, entry.error ?? 'Not connected', '', ''])
+  } else {
+    entry.windows.forEach((window, index) => {
+      rows.push([index === 0 ? title : '', window.label, `${window.usedPct}%`, resetLabel(window.resetsAt)])
+    })
+  }
+  // A provider with no readable window can still hold a fact worth saying.
+  for (const note of entry.notes ?? []) {
+    rows.push(['', note, '', ''])
+  }
+}
+
 export function renderQuotaTable(report: QuotaReport, opts: { color?: boolean } = {}): string {
   const rows: string[][] = []
+  const profiles = report.claudeProfiles ?? []
+  let profilesPlaced = false
   for (const provider of report.providers) {
-    const title = provider.plan ? `${provider.name} (${provider.plan})` : provider.name
-    if (provider.windows.length === 0) {
-      rows.push([title, provider.error ?? 'Not connected', '', ''])
-      // A provider with no readable window can still hold a fact worth saying.
-      for (const note of provider.notes ?? []) rows.push(['', note, '', ''])
-      continue
+    pushQuotaRows(rows, provider.plan ? `${provider.name} (${provider.plan})` : provider.name, provider)
+    // The profile rows are the Claude row split by directory, so they read directly under it
+    // rather than stranded at the bottom of the table.
+    if (provider.id === 'claude') {
+      for (const profile of profiles) {
+        pushQuotaRows(rows, `Claude (${profile.label})`, profile)
+      }
+      profilesPlaced = true
     }
-    provider.windows.forEach((window, index) => {
-      rows.push([index === 0 ? title : '', window.label, `${window.usedPct}%`, resetLabel(window.resetsAt)])
-    })
-    for (const note of provider.notes ?? []) rows.push(['', note, '', ''])
   }
-  for (const profile of report.claudeProfiles ?? []) {
-    const title = `Claude (${profile.label})`
-    if (profile.windows.length === 0) {
-      rows.push([title, profile.error ?? 'Not connected', '', ''])
-      continue
+  if (!profilesPlaced) {
+    for (const profile of profiles) {
+      pushQuotaRows(rows, `Claude (${profile.label})`, profile)
     }
-    profile.windows.forEach((window, index) => {
-      rows.push([index === 0 ? title : '', window.label, `${window.usedPct}%`, resetLabel(window.resetsAt)])
-    })
   }
   const columns = [{ header: 'Provider' }, { header: 'Window' }, { header: 'Used', right: true }, { header: 'Resets' }]
   return renderTable(columns, rows, { color: opts.color })

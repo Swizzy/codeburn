@@ -101,19 +101,43 @@ describe('collectQuota Claude profiles', () => {
     ])
   })
 
-  it('prints a table row per profile only when profiles are present', () => {
+  it('prints a table row per profile, under the Claude row, only when profiles are present', () => {
     const base = { id: 'claude' as const, name: 'Claude', available: true, windows: [{ label: 'Weekly', usedPct: 10 }] }
-    const without = renderQuotaTable({ providers: [base] }, { color: false })
+    const kimi = { id: 'kimi' as const, name: 'Kimi', available: true, windows: [{ label: 'Weekly', usedPct: 5 }] }
+    const without = renderQuotaTable({ providers: [base, kimi] }, { color: false })
     expect(without).not.toContain('Claude (Work)')
     const withProfiles = renderQuotaTable({
-      providers: [base],
+      providers: [base, kimi],
       claudeProfiles: [
         { ...base, label: 'Default', path: dirs[0] },
         { ...base, label: 'Work', path: dirs[1], windows: [{ label: 'Weekly', usedPct: 40 }] },
       ],
     }, { color: false })
-    expect(withProfiles).toContain('Claude (Default)')
-    expect(withProfiles).toContain('Claude (Work)')
+    // The rendered rows sit between the header rule and the closing bar, one per window.
+    const titles = withProfiles.split('\n').slice(3, -1).map(line => line.split('│')[1].trim())
+    expect(titles).toEqual(['Claude', 'Claude (Default)', 'Claude (Work)', 'Kimi'])
     expect(withProfiles).toContain('40%')
+  })
+
+  it('reuses the Claude row for the default directory instead of reading it twice', async () => {
+    let reads = 0
+    const report = await collectQuota({
+      readers: [{
+        id: 'claude', name: 'Claude',
+        read: async () => { reads += 1; return connected(0.1) },
+      }],
+      claudeConfigDirs: dirs,
+    })
+    // One read for the `claude` row, one for the work directory: the default directory is
+    // the same credential the row already asked about.
+    expect(reads).toBe(1)
+    const [first, second] = report.claudeProfiles ?? []
+    expect([first?.label, first?.available, first?.plan, first?.windows]).toEqual([
+      'Default', true, 'Max 5x', [{ label: 'Weekly', usedPct: 10 }],
+    ])
+    expect(first?.id).toBe(claudeConfigSourceId(dirs[0]))
+    expect(first?.path).toBe(dirs[0])
+    // The work directory has no credential under this fake home, so it reads as disconnected.
+    expect(second?.label).toBe('Work')
   })
 })
