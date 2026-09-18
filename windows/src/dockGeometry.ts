@@ -37,6 +37,9 @@ export type Metrics = {
   ringLabelSpacing: number
   providerIconSize: number
   percentTextSize: number
+  /// The profile caption under the percent, present only on per-directory Claude rows.
+  profileCaptionSize: number
+  profileCaptionHeight: number
   alertSize: number
   alertOffset: number
   detailWidth: number
@@ -66,6 +69,8 @@ function build(scale: number): Metrics {
     ringLabelSpacing: points(6, scale),
     providerIconSize: points(26, scale),
     percentTextSize: points(17, scale),
+    profileCaptionSize: points(11, scale),
+    profileCaptionHeight: points(14, scale),
     alertSize: points(12, scale),
     alertOffset: points(19, scale),
     detailWidth: points(350, detailScale),
@@ -261,9 +266,9 @@ export function alongPad(m: Metrics, attachment: number): number {
   return m.railAlongPad + m.flareCompensation * smoothstep(attachment)
 }
 
-export function railLength(m: Metrics, rows: number, attachment: number): number {
+export function railLength(m: Metrics, rows: number, attachment: number, rowExtra = 0): number {
   const count = Math.max(rows, 1)
-  return alongPad(m, attachment) * 2 + count * m.rowHeight + (count - 1) * m.rowSpacing
+  return alongPad(m, attachment) * 2 + count * (m.rowHeight + rowExtra) + (count - 1) * m.rowSpacing
 }
 
 /// Motion: durations in ms and cubic-bezier control points, verbatim from CapacityDockMotion.
