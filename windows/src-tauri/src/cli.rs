@@ -147,7 +147,13 @@ pub struct CliStatus {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum DockQuota {
-    Ready { providers: Value },
+    Ready {
+        providers: Value,
+        /// One entry per Claude config directory when the CLI knows two or more, else
+        /// empty. `providers` keeps its single Claude row either way.
+        #[serde(rename = "claudeProfiles")]
+        claude_profiles: Value,
+    },
     CliOutdated,
     Unavailable { message: String },
 }
@@ -320,17 +326,7 @@ impl CodeburnCli {
             }
         };
 
-        match serde_json::from_str::<Value>(&stdout) {
-            Ok(payload) => DockQuota::Ready {
-                providers: payload
-                    .get("providers")
-                    .cloned()
-                    .unwrap_or_else(|| Value::Array(vec![])),
-            },
-            Err(err) => DockQuota::Unavailable {
-                message: format!("CLI returned invalid JSON: {err}"),
-            },
-        }
+        parse_quota(&stdout)
     }
 
     /// `codeburn export -f <format> -o <path>`, the mac's `runExport`. The path is built by
@@ -435,6 +431,25 @@ impl CodeburnCli {
             bail!("codeburn CLI exited {}: {}", status, msg);
         }
         Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
+    }
+}
+
+/// The JSON half of `fetch_quota`, kept separate so it can be tested without a spawn.
+pub(crate) fn parse_quota(stdout: &str) -> DockQuota {
+    match serde_json::from_str::<Value>(stdout) {
+        Ok(payload) => DockQuota::Ready {
+            providers: payload
+                .get("providers")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![])),
+            claude_profiles: payload
+                .get("claudeProfiles")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![])),
+        },
+        Err(err) => DockQuota::Unavailable {
+            message: format!("CLI returned invalid JSON: {err}"),
+        },
     }
 }
 
@@ -1157,6 +1172,26 @@ mod which {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_payload_carries_profiles_or_an_empty_list() {
+        let with = parse_quota(r#"{"providers":[{"id":"claude"}],"claudeProfiles":[{"id":"claude-config:ab","label":"Work"}]}"#);
+        match with {
+            DockQuota::Ready { providers, claude_profiles } => {
+                assert_eq!(providers.as_array().map(Vec::len), Some(1));
+                assert_eq!(claude_profiles[0]["label"], "Work");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+
+        let without = parse_quota(r#"{"providers":[]}"#);
+        match without {
+            DockQuota::Ready { claude_profiles, .. } => assert_eq!(claude_profiles, serde_json::json!([])),
+            other => panic!("expected Ready, got {other:?}"),
+        }
+
+        assert!(matches!(parse_quota("nope"), DockQuota::Unavailable { .. }));
+    }
 
     #[test]
     fn only_a_named_read_only_subcommand_opens_a_terminal() {
