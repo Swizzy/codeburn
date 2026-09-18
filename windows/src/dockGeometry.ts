@@ -266,9 +266,12 @@ export function alongPad(m: Metrics, attachment: number): number {
   return m.railAlongPad + m.flareCompensation * smoothstep(attachment)
 }
 
-export function railLength(m: Metrics, rows: number, attachment: number, rowExtra = 0): number {
+/// The rail's length along its own axis. `alongExtra` is what each row adds along that axis,
+/// which is zero on a horizontal rail: a caption stacked under the glyph grows a vertical
+/// rail's length but only a horizontal rail's thickness.
+export function railLength(m: Metrics, rows: number, attachment: number, alongExtra = 0): number {
   const count = Math.max(rows, 1)
-  return alongPad(m, attachment) * 2 + count * (m.rowHeight + rowExtra) + (count - 1) * m.rowSpacing
+  return alongPad(m, attachment) * 2 + count * (m.rowHeight + alongExtra) + (count - 1) * m.rowSpacing
 }
 
 /// Motion: durations in ms and cubic-bezier control points, verbatim from CapacityDockMotion.
