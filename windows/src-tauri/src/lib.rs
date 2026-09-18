@@ -907,7 +907,13 @@ mod commands {
         // The dock draws part of this answer and has no way of its own to ask for it. Only a
         // glance that actually moved is broadcast, so a poll that found the same sessions and
         // the same totals costs the dock no render.
-        let is_today = crate::glance::is_today_key(&period, &provider, &days, &scope);
+        let is_today = crate::glance::is_today_key(
+            &period,
+            &provider,
+            &days,
+            &scope,
+            claude_config_source.is_none(),
+        );
         if let Some(glance) = state.glance.record(&payload, is_today) {
             let _ = app.emit("codeburn://glance", &glance);
         }
