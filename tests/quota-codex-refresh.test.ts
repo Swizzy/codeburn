@@ -148,6 +148,7 @@ describe('Codex quota credential rotation', () => {
 
     // What the `quota` command does: race the provider, print, then exit.
     const report = await collectQuota({
+      claudeConfigDirs: [],
       timeoutMs: 5,
       readers: [{
         id: 'codex',

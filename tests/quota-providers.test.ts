@@ -287,6 +287,7 @@ describe('quota command envelope', () => {
 
   it('renders providers, windows and the omitted-error contract', async () => {
     const report = await collectQuota({
+      claudeConfigDirs: [],
       readers: [
         { id: 'claude', name: 'Claude', read: async () => connected },
         { id: 'kimi', name: 'Kimi', read: async () => missing },
@@ -317,6 +318,7 @@ describe('quota command envelope', () => {
       primary: { label: 'Weekly', percent: 0.45, resetsAt: '2026-09-21T12:00:00.000Z' }, details: [],
     }
     const report = await collectQuota({
+      claudeConfigDirs: [],
       readers: [
         { id: 'zai', name: 'Z.ai', read: async () => zai },
         { id: 'zcode', name: 'ZCode', read: async () => zcode },
@@ -339,6 +341,7 @@ describe('quota command envelope', () => {
       primary: { label: 'Weekly', percent: 0.45, resetsAt: '2026-09-21T12:00:00.000Z' }, details: [],
     }
     const report = await collectQuota({
+      claudeConfigDirs: [],
       readers: [
         { id: 'zai', name: 'Z.ai', read: async () => zai },
         { id: 'zcode', name: 'ZCode', read: async () => zcode },
@@ -349,6 +352,7 @@ describe('quota command envelope', () => {
 
   it('gives up on a provider that outlives its timeout', async () => {
     const report = await collectQuota({
+      claudeConfigDirs: [],
       timeoutMs: 5,
       readers: [{ id: 'gemini', name: 'Gemini', read: () => new Promise<QuotaProvider>(() => {}) }],
     })
